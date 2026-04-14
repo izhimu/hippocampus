@@ -302,6 +302,34 @@ fn cmd_install(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 installed.push("OpenClaw HIPPOCAMPUS_HOME".to_string());
             }
         }
+
+        // 3. Configure crons in openclaw.json
+        let openclaw_json_path = format!("{}/.openclaw/openclaw.json", home_dir);
+        if let Ok(config_str) = std::fs::read_to_string(&openclaw_json_path) {
+            if let Ok(mut config) = serde_json::from_str::<serde_json::Value>(&config_str) {
+                let has_hippo = config.get("crons").and_then(|c| c.as_array()).map_or(false, |arr| {
+                    arr.iter().any(|c| {
+                        c.get("name").and_then(|n| n.as_str()).map_or(false, |name| {
+                            name.contains("hippocampus") || name.contains("reflect") || name.contains("vacuum")
+                        })
+                    })
+                });
+                let crons = config.get_mut("crons").and_then(|c| c.as_array_mut());
+                if has_hippo {
+                    skipped.push("OpenClaw crons (已配置)".to_string());
+                } else if let Some(crons_arr) = crons {
+                    crons_arr.push(serde_json::json!({ "name": "Hippocampus_Reflect_2230", "schedule": "30 22 * * *", "enabled": true, "task": "exec hippocampus reflect --days 3" }));
+                    crons_arr.push(serde_json::json!({ "name": "Hippocampus_Vacuum_Monthly", "schedule": "0 3 1 * *", "enabled": true, "task": "exec hippocampus vacuum" }));
+                    installed.push("OpenClaw crons (reflect + vacuum)".to_string());
+                } else {
+                    failed.push("OpenClaw crons: crons 字段不存在".to_string());
+                }
+                // write back
+                if let Ok(pretty) = serde_json::to_string_pretty(&config) {
+                    let _ = std::fs::write(&openclaw_json_path, pretty);
+                }
+            }
+        }
     }
 
     if claude {
