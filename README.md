@@ -46,6 +46,7 @@ hippocampus init
 # 记忆操作
 hippocampus remember --content "内容" --importance 7 --tags "标签"
 hippocampus recall --query "关键词" --top-k 5
+hippocampus recall --query "关键词" --top-k 5 --brief  # 紧凑模式
 hippocampus gate --message "用户消息"          # 只评估
 hippocampus gate --message "用户消息" --write  # 评估+写入
 
@@ -69,6 +70,16 @@ hippocampus install --claude     # 只装 Claude Code
 # 从 OpenClaw memory 批量迁移
 hippocampus import --source /path/to/memory [--dry-run] [--clean-tests]
 ```
+
+### recall --brief 紧凑模式
+
+`recall` 新增 `--brief` flag，输出格式为每条结果一行：
+```
+[0.87] [L2] 用户表达了对基金定投策略的兴趣，倾向于沪深300和中证500...
+[0.72] [L3] 主人决定每月定投2000元，分散到3只基金中...
+```
+
+适合 Agent 自动化调用场景，节省 token 消耗。
 
 ### 数据目录
 

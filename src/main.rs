@@ -126,6 +126,7 @@ fn cmd_recall(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let include_l3 = !has_flag(args, "--l1l2-only");
     let emotion_filter = arg_val(args, "--emotion");
     let with_context = arg_val(args, "--with-context");
+    let brief = has_flag(args, "--brief");
 
     let home = get_home();
     let hippo = hippocampus::Hippocampus::new(&home)?;
@@ -137,13 +138,23 @@ fn cmd_recall(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         emotion_filter.as_deref(),
         with_context.as_deref(),
     );
-    print_json(&serde_json::json!({
-        "status": "ok",
-        "query": query,
-        "top_k": top_k,
-        "results_count": results.len(),
-        "results": results,
-    }));
+    if brief {
+        for r in &results {
+            let score = r.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let layer = r.get("layer").and_then(|v| v.as_str()).unwrap_or("?");
+            let content = r.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            let preview: String = content.chars().take(100).collect();
+            println!("[{:.4}] [{}] {}", score, layer, preview);
+        }
+    } else {
+        print_json(&serde_json::json!({
+            "status": "ok",
+            "query": query,
+            "top_k": top_k,
+            "results_count": results.len(),
+            "results": results,
+        }));
+    }
     Ok(())
 }
 
