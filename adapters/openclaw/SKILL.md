@@ -1,30 +1,24 @@
----
-name: hippocampus
-description: 🧠 仿生认知记忆系统（Rust）— 基于Engram印迹的AI Agent记忆增强
----
-
 # Hippocampus 记忆系统
 
-## 记忆操作
-- 记住信息：exec `hippocampus remember --content "内容" --importance N --source dialogue --tags "标签1,标签2"`
-- 检索记忆：exec `hippocampus recall --query "关键词" --top-k 5`
-- 自动评估+写入：exec `hippocampus gate --message "用户消息" --write`
-- 仅评估不写入：exec `hippocampus gate --message "用户消息"`
+本地 Rust CLI 记忆管理工具，路径：`/home/bot/.cargo/bin/hippocampus`，通过 exec 调用。
 
-## 记忆维护
-- 反思巩固：exec `hippocampus reflect --days 3`
-- 记忆再巩固：exec `hippocampus reconsolidate --days 30`
-- 去重检测：exec `hippocampus dedup --dry-run`
-- 清理整理：exec `hippocampus vacuum`
-- 统计信息：exec `hippocampus stats`
+## 适用场景
+用户涉及记忆查询、个人信息、历史对话、偏好回忆、上下文关联时自动匹配。
 
-## 数据目录
-- 默认：~/.hippocampus
-- 可通过 HIPPOCAMPUS_HOME 环境变量覆盖
-- JSONL 分层存储：engrams_L1/L2/L3.jsonl
+## 记忆规则
 
-## 使用场景
-- 重要对话 → gate --write 自动记忆
-- 定时报告摘要 → remember 手动写入
-- 回答问题前 → recall 检索相关记忆
-- 每日维护 → reflect + vacuum
+### 对话前：召回（必执行，简单问候除外）
+```bash
+hippocampus recall --query "用户消息关键词" --top-k 3
+```
+
+### 对话后：门控写入（必执行，简单问候除外）
+```bash
+hippocampus gate --message "用户原始消息" --write
+```
+
+### 简单问候例外
+纯"你好""早安""晚安"等可跳过 recall 和 gate。
+
+### 手动记忆
+用户明确说"记住"时：`hippocampus remember --content "内容" --importance 8`
