@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "hippocampus gate --message \"$CLAUDE_LAST_USER_MESSAGE\" --write 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}
