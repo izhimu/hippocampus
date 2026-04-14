@@ -351,21 +351,24 @@ fn cmd_install(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         let home_dir = std::env::var("HOME").unwrap_or_default();
         let cwd = std::env::current_dir().unwrap_or_default();
 
-        // 1. SKILL.md in project .claude/skills/hippocampus/
-        let skill_dir = cwd.join(".claude/skills/hippocampus");
-        let skill_md = skill_dir.join("SKILL.md");
-        if skill_md.exists() {
+        // 1. SKILL.md from adapters/claude/ → target project .claude/skills/hippocampus/
+        let repo_dir = std::env::current_dir().unwrap_or_default();
+        let src_skill = repo_dir.join("adapters/claude/SKILL.md");
+        let target_skill_dir = std::env::var("HOME")
+            .map(|h| std::path::PathBuf::from(format!("{}/.claude/skills/hippocampus", h)))
+            .unwrap_or_else(|_| std::path::PathBuf::from(".claude/skills/hippocampus"));
+        let target_skill_md = target_skill_dir.join("SKILL.md");
+        if target_skill_md.exists() {
             skipped.push("Claude SKILL.md (已存在)".to_string());
-        } else {
-            let src = cwd.join(".claude/skills/hippocampus/SKILL.md");
-            if src.exists() {
-                let _ = std::fs::create_dir_all(&skill_dir);
-                if std::fs::copy(&src, &skill_md).is_ok() {
-                    installed.push("Claude SKILL.md".to_string());
-                }
+        } else if src_skill.exists() {
+            let _ = std::fs::create_dir_all(&target_skill_dir);
+            if std::fs::copy(&src_skill, &target_skill_md).is_ok() {
+                installed.push("Claude SKILL.md".to_string());
             } else {
-                failed.push("Claude: .claude/skills/hippocampus/SKILL.md 不存在".to_string());
+                failed.push("Claude SKILL.md: 复制失败".to_string());
             }
+        } else {
+            failed.push("Claude: adapters/claude/SKILL.md 不存在".to_string());
         }
 
         // 2. Global CLAUDE.md — append hint
