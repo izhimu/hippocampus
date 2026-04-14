@@ -122,8 +122,8 @@ fn cmd_remember(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 fn cmd_recall(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let query = arg_val(args, "--query").ok_or("--query required")?;
     let top_k: usize = arg_val(args, "--top-k").and_then(|v| v.parse().ok()).unwrap_or(5);
-    let min_score: f64 = arg_val(args, "--min-score").and_then(|v| v.parse().ok()).unwrap_or(0.0);
-    let include_l3 = has_flag(args, "--include-l3");
+    let min_score: f64 = arg_val(args, "--min-score").and_then(|v| v.parse().ok()).unwrap_or(0.01);
+    let include_l3 = !has_flag(args, "--l1l2-only");
     let emotion_filter = arg_val(args, "--emotion");
     let with_context = arg_val(args, "--with-context");
 
