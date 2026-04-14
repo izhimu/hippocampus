@@ -2,6 +2,7 @@ pub mod config;
 pub mod dedup;
 pub mod emotion;
 pub mod engram;
+pub mod gateway;
 pub mod learned_keywords;
 pub mod memory_gate;
 pub mod reconsolidation;

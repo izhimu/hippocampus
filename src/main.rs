@@ -57,6 +57,7 @@ fn print_usage() {
     eprintln!("  hippocampus learned [--top N] [--reset]");
     eprintln!("  hippocampus import --source PATH [--dry-run] [--clean-tests] [--min-importance N]");
   eprintln!("  hippocampus vacuum");
+    eprintln!("  hippocampus gateway [--port 8088]");
     eprintln!();
     eprintln!("Env: HIPPOCAMPUS_HOME (default: ~/.hippocampus)");
 }
@@ -76,6 +77,7 @@ fn run_cmd(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Error>>
         "import" => cmd_import(args),
         "vacuum" => cmd_vacuum(),
         "learned" => cmd_learned(args),
+        "gateway" => cmd_gateway(args),
         _ => {
             eprintln!("Unknown command: {}", cmd);
             print_usage();
@@ -237,7 +239,7 @@ fn cmd_gate(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         hippo.should_remember(&message)
     };
 
-    print_json(&serde_json::json!({
+    let output = serde_json::json!({
         "status": "ok",
         "should_remember": decision.should_remember,
         "importance": decision.importance,
@@ -253,7 +255,15 @@ fn cmd_gate(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             "prefrontal": { "score": decision.components.prefrontal.score, "reason": decision.components.prefrontal.reason },
             "temporal": { "score": decision.components.temporal.score, "reason": decision.components.temporal.reason },
         },
-    }));
+    });
+
+    // 保存 last_gate.json 供 gateway 读取
+    if do_write || force {
+        let gate_path = std::path::Path::new(&home).join("last_gate.json");
+        let _ = std::fs::write(&gate_path, serde_json::to_string_pretty(&output).unwrap_or_default());
+    }
+
+    print_json(&output);
     Ok(())
 }
 
@@ -690,5 +700,14 @@ fn cmd_vacuum() -> Result<(), Box<dyn std::error::Error>> {
         "status": "ok",
         "vacuum": result,
     }));
+    Ok(())
+}
+
+fn cmd_gateway(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let port: u16 = arg_val(args, "--port").and_then(|v| v.parse().ok()).unwrap_or(8088);
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
+    rt.block_on(hippocampus::gateway::run_gateway(port))
+        .map_err(|e| -> Box<dyn std::error::Error> { e })?;
     Ok(())
 }
