@@ -3,6 +3,10 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::fs;
 
+fn dirs_home() -> Option<PathBuf> {
+    env::var("HOME").ok().map(PathBuf::from)
+}
+
 /// 严格参照 Python config.py 所有字段和默认值
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HippocampusConfig {
@@ -54,8 +58,9 @@ impl HippocampusConfig {
         } else if let Ok(val) = env::var("HIPPOCAMPUS_HOME") {
             PathBuf::from(val)
         } else {
-            // fallback: ./cognitive_memory relative to CWD
-            PathBuf::from("./cognitive_memory")
+            // fallback: ~/.hippocampus
+            dirs_home().unwrap_or_else(|| PathBuf::from(".hippocampus"))
+            .join(".hippocampus")
         };
 
         let cognitive_dir = cog;

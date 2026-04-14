@@ -1,7 +1,9 @@
 /// hippocampus CLI — 手动解析 args，无外部依赖
 
 fn get_home() -> String {
-    std::env::var("HIPPOCAMPUS_HOME").unwrap_or_else(|_| "./cognitive_memory".to_string())
+    std::env::var("HIPPOCAMPUS_HOME").unwrap_or_else(|_| {
+        std::env::var("HOME").map(|h| format!("{}/.hippocampus", h)).unwrap_or_else(|_| "./.hippocampus".to_string())
+    })
 }
 
 fn print_json<T: serde::Serialize>(val: &T) {
