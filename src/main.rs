@@ -351,44 +351,81 @@ fn cmd_install(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         let home_dir = std::env::var("HOME").unwrap_or_default();
         let cwd = std::env::current_dir().unwrap_or_default();
 
-        // 1. CLAUDE.md in project root
-        let claude_md = cwd.join("CLAUDE.md");
-        if claude_md.exists() {
-            skipped.push("Claude CLAUDE.md (已存在)".to_string());
+        // 1. SKILL.md in project .claude/skills/hippocampus/
+        let skill_dir = cwd.join(".claude/skills/hippocampus");
+        let skill_md = skill_dir.join("SKILL.md");
+        if skill_md.exists() {
+            skipped.push("Claude SKILL.md (已存在)".to_string());
         } else {
-            let src = cwd.join("adapters/claude/CLAUDE.md");
-            if src.exists() && std::fs::copy(&src, &claude_md).is_ok() {
-                installed.push("Claude CLAUDE.md".to_string());
-            } else if !src.exists() {
-                failed.push("Claude: adapters/claude/CLAUDE.md 不存在".to_string());
+            let src = cwd.join(".claude/skills/hippocampus/SKILL.md");
+            if src.exists() {
+                let _ = std::fs::create_dir_all(&skill_dir);
+                if std::fs::copy(&src, &skill_md).is_ok() {
+                    installed.push("Claude SKILL.md".to_string());
+                }
+            } else {
+                failed.push("Claude: .claude/skills/hippocampus/SKILL.md 不存在".to_string());
             }
         }
 
-        // 2. Global CLAUDE.md
+        // 2. Global CLAUDE.md — append hint
         let global = format!("{}/.claude/CLAUDE.md", home_dir);
         if let Some(parent) = Path::new(&global).parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         if Path::new(&global).exists() {
             let content = std::fs::read_to_string(&global).unwrap_or_default();
-            if content.contains("hippocampus") {
+            if content.contains("hippocampus skill") {
                 skipped.push("Claude 全局 CLAUDE.md (已包含)".to_string());
             } else if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&global) {
-                let _ = write!(f, "\n# Hippocampus 记忆系统\n使用 hippocampus CLI 管理记忆：recall/remember/gate/stats/reflect\n");
+                let _ = write!(f, "\n- 使用 hippocampus skill 管理记忆\n");
                 installed.push("Claude 全局 CLAUDE.md".to_string());
             }
         } else {
-            let _ = std::fs::write(&global, "# Hippocampus 记忆系统\n使用 hippocampus CLI 管理记忆：recall/remember/gate/stats/reflect\n");
+            let _ = std::fs::write(&global, "- 使用 hippocampus skill 管理记忆\n");
             installed.push("Claude 全局 CLAUDE.md".to_string());
         }
 
-        // 3. Hooks
+        // 3. Hooks — merge into ~/.claude/settings.json
         let claude_settings = format!("{}/.claude/settings.json", home_dir);
-        let hooks_src = cwd.join("adapters/claude/hooks-example.json");
-        if Path::new(&claude_settings).exists() {
-            skipped.push("Claude settings.json (已存在)".to_string());
-        } else if hooks_src.exists() && std::fs::copy(&hooks_src, &claude_settings).is_ok() {
-            installed.push("Claude hooks 配置".to_string());
+        let hooks_src = cwd.join("adapters/claude/hooks.json");
+        if let Ok(hooks_content) = std::fs::read_to_string(&hooks_src) {
+            if let Ok(hooks_val) = serde_json::from_str::<serde_json::Value>(&hooks_content) {
+                if let Some(hooks_hooks) = hooks_val.get("hooks").cloned() {
+                    if Path::new(&claude_settings).exists() {
+                        if let Ok(settings_content) = std::fs::read_to_string(&claude_settings) {
+                            if let Ok(mut settings) = serde_json::from_str::<serde_json::Value>(&settings_content) {
+                                if let Some(existing) = settings.get_mut("hooks") {
+                                    // merge hooks entries
+                                    if let (Some(target), Some(source)) = (existing.as_object_mut(), hooks_hooks.as_object()) {
+                                        for (k, v) in source {
+                                            target.insert(k.clone(), v.clone());
+                                        }
+                                    }
+                                } else {
+                                    settings.as_object_mut().map(|o| o.insert("hooks".to_string(), hooks_hooks));
+                                }
+                                if let Ok(pretty) = serde_json::to_string_pretty(&settings) {
+                                    if std::fs::write(&claude_settings, pretty).is_ok() {
+                                        installed.push("Claude hooks 配置（已合并）".to_string());
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        if let Some(parent) = Path::new(&claude_settings).parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        if let Ok(pretty) = serde_json::to_string_pretty(&hooks_val) {
+                            if std::fs::write(&claude_settings, pretty).is_ok() {
+                                installed.push("Claude hooks 配置".to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            failed.push("Claude: adapters/claude/hooks.json 不存在".to_string());
         }
     }
 
