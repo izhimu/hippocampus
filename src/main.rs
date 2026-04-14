@@ -704,6 +704,24 @@ fn cmd_vacuum() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_gateway(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    if has_flag(args, "--help") || has_flag(args, "-h") {
+        eprintln!("🧠 hippocampus gateway — Web Console");
+        eprintln!();
+        eprintln!("Usage: hippocampus gateway [--port PORT]");
+        eprintln!();
+        eprintln!("Options:");
+        eprintln!("  --port PORT   Listen port (default: 8088)");
+        eprintln!("  --help, -h    Show this help");
+        eprintln!();
+        eprintln!("API Endpoints:");
+        eprintln!("  GET  /api/stats          Memory statistics");
+        eprintln!("  GET  /api/engrams         List engrams");
+        eprintln!("  POST /api/recall           Recall by query");
+        eprintln!("  POST /api/gate            Evaluate gate (dry-run)");
+        eprintln!("  POST /api/gate/execute    Evaluate and write");
+        eprintln!("  GET  /api/events          WebSocket events");
+        return Ok(());
+    }
     let port: u16 = arg_val(args, "--port").and_then(|v| v.parse().ok()).unwrap_or(8088);
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
