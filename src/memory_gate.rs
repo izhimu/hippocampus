@@ -269,8 +269,9 @@ impl<'a> MemoryGate<'a> {
 }
 
 fn extract_emotion_from_reason(reason: &str) -> String {
-    if let Some(pos) = reason.find("情绪=") {
-        let rest = &reason[pos + 3..];
+    let prefix = "情绪=";
+    if let Some(pos) = reason.find(prefix) {
+        let rest = &reason[pos + prefix.len()..];
         if let Some(comma) = rest.find(',') {
             return rest[..comma].trim().to_string();
         }
