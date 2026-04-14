@@ -55,7 +55,8 @@ fn print_usage() {
     eprintln!("  hippocampus install [--openclaw] [--claude] [--all]");
     eprintln!("  hippocampus stats");
     eprintln!("  hippocampus learned [--top N] [--reset]");
-    eprintln!("  hippocampus vacuum");
+    eprintln!("  hippocampus import --source PATH [--dry-run] [--clean-tests] [--min-importance N]");
+  eprintln!("  hippocampus vacuum");
     eprintln!();
     eprintln!("Env: HIPPOCAMPUS_HOME (default: ~/.hippocampus)");
 }
@@ -72,6 +73,7 @@ fn run_cmd(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Error>>
         "gate" => cmd_gate(args),
         "stats" => cmd_stats(),
         "install" => cmd_install(args),
+        "import" => cmd_import(args),
         "vacuum" => cmd_vacuum(),
         "learned" => cmd_learned(args),
         _ => {
@@ -417,6 +419,216 @@ fn cmd_learned(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         })).collect::<Vec<_>>()
     }));
     Ok(())
+}
+
+fn cmd_import(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    use std::path::Path;
+
+    let source_path = arg_val(args, "--source").ok_or("--source required")?;
+    let dry_run = has_flag(args, "--dry-run");
+    let clean_tests = has_flag(args, "--clean-tests");
+    let min_importance: u8 = arg_val(args, "--min-importance").and_then(|v| v.parse().ok()).unwrap_or(3);
+
+    let home = get_home();
+    let config_path = Path::new(&home).join("config.json");
+    if !config_path.exists() {
+        return Err("Hippocampus 未初始化，请先运行 hippocampus init".into());
+    }
+    if !Path::new(&source_path).is_dir() {
+        return Err(format!("源目录不存在: {}", source_path).into());
+    }
+
+    let mut hippo = hippocampus::Hippocampus::new(&home)?;
+    let mut details = Vec::new();
+    let mut files_scanned = 0u32;
+    let mut files_imported = 0u32;
+    let mut engrams_created = 0u32;
+    let mut tests_cleaned = 0u32;
+    let mut all_imported_contents = Vec::new();
+
+    // --clean-tests: remove engrams containing "测试"
+    if clean_tests && !dry_run {
+        for layer in &["L1", "L2", "L3"] {
+            let path = Path::new(&home).join(format!("engrams_{}.jsonl", layer));
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                let original_lines: Vec<&str> = content.lines().collect();
+                let kept: Vec<String> = original_lines.iter()
+                    .filter(|line| !line.contains("测试"))
+                    .map(|s| s.to_string())
+                    .collect();
+                tests_cleaned += (original_lines.len() - kept.len()) as u32;
+                std::fs::write(&path, kept.join("\n"))?;
+            }
+        }
+    } else if clean_tests && dry_run {
+        // dry-run: count
+        for layer in &["L1", "L2", "L3"] {
+            let path = Path::new(&home).join(format!("engrams_{}.jsonl", layer));
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                tests_cleaned += content.lines().filter(|l| l.contains("测试")).count() as u32;
+            }
+        }
+    }
+
+    // Scan .md files
+    let entries: Vec<std::fs::DirEntry> = std::fs::read_dir(&source_path)?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path().extension().map_or(false, |ext| ext == "md")
+        })
+        .collect();
+
+    files_scanned = entries.len() as u32;
+
+    for entry in &entries {
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        let file_content = match std::fs::read_to_string(entry.path()) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        if file_content.len() < 20 {
+            continue;
+        }
+
+        // Classify
+        let (layer, importance, tags) = classify_file(&file_name, &file_content);
+
+        if importance < min_importance {
+            continue;
+        }
+
+        // Split by ## headings
+        let sections = split_by_headings(&file_content);
+        let section_count = sections.len();
+
+        for section in &sections {
+            let truncated = if section.chars().count() > 1000 {
+                section.chars().take(1000).collect()
+            } else {
+                section.clone()
+            };
+
+            if !dry_run {
+                hippo.remember(
+                    &truncated,
+                    importance,
+                    &format!("import:{}", file_name),
+                    tags,
+                    None,
+                    layer,
+                    layer == "L3",
+                )?;
+                engrams_created += 1;
+            }
+            all_imported_contents.push(truncated);
+        }
+
+        files_imported += 1;
+        details.push(serde_json::json!({
+            "file": file_name,
+            "sections": section_count,
+            "layer": layer,
+            "importance": importance,
+        }));
+    }
+
+    // Learn keywords from imported content
+    let mut learned_words = 0u32;
+    if !dry_run && !all_imported_contents.is_empty() {
+        let lk_config = hippocampus::HippocampusConfig::new(None, Some(&home));
+        let mut learned = hippocampus::LearnedKeywords::load(&lk_config.learned_keywords_path);
+        for content in &all_imported_contents {
+            learned.update_from_engram(content);
+        }
+        learned.refine();
+        learned.save(&lk_config.learned_keywords_path)?;
+        learned_words = learned.word_freq.len() as u32;
+    }
+
+    print_json(&serde_json::json!({
+        "status": "ok",
+        "source_dir": source_path,
+        "dry_run": dry_run,
+        "files_scanned": files_scanned,
+        "files_imported": files_imported,
+        "engrams_created": engrams_created,
+        "tests_cleaned": tests_cleaned,
+        "learned_words": learned_words,
+        "details": details,
+    }));
+    Ok(())
+}
+
+/// Classify file by name, return (layer, importance, tags)
+fn classify_file(name: &str, content: &str) -> (&'static str, u8, &'static [&'static str]) {
+    // Check date format YYYY-MM-DD.md
+    let is_date = name.len() == 14
+        && name.chars().nth(4) == Some('-')
+        && name.chars().nth(7) == Some('-')
+        && name.ends_with(".md");
+
+    if name == "MEMORY.md" {
+        return ("L3", 8, &["核心记忆"][..]);
+    }
+    if name == "SECURITY_RULES.md" {
+        return ("L3", 9, &["安全规则"][..]);
+    }
+    if name.starts_with("fund_names") {
+        return ("L3", 7, &["基金"][..]);
+    }
+    if name.starts_with("financial-knowledge") {
+        return ("L3", 6, &["金融知识"][..]);
+    }
+    if name.starts_with("financial-quick-ref") {
+        return ("L3", 6, &["金融参考"][..]);
+    }
+    if name.starts_with("insights") {
+        return ("L2", 5, &["洞察"][..]);
+    }
+    if name.starts_with("chansha") || name.contains("plan") {
+        return ("L2", 5, &["计划"][..]);
+    }
+    if is_date {
+        let len = content.chars().count();
+        let imp = if len > 500 { 5 } else if len > 200 { 4 } else { 3 };
+        return ("L2", imp, &["每日记录"][..]);
+    }
+    ("L2", 4, &["归档"][..])
+}
+
+/// Split content by ## headings
+fn split_by_headings(content: &str) -> Vec<String> {
+    let mut sections = Vec::new();
+    let mut current = String::new();
+    let mut found_heading = false;
+
+    for line in content.lines() {
+        if line.starts_with("## ") {
+            if found_heading || !current.is_empty() {
+                let trimmed = current.trim().to_string();
+                if !trimmed.is_empty() {
+                    sections.push(trimmed);
+                }
+            }
+            current = line.trim_start_matches("# ").to_string();
+            found_heading = true;
+        } else {
+            current.push_str("\n");
+            current.push_str(line);
+        }
+    }
+    // Push last section
+    let trimmed = current.trim().to_string();
+    if !trimmed.is_empty() {
+        sections.push(trimmed);
+    }
+
+    if sections.is_empty() && !content.trim().is_empty() {
+        sections.push(content.trim().to_string());
+    }
+
+    sections
 }
 
 fn cmd_vacuum() -> Result<(), Box<dyn std::error::Error>> {
