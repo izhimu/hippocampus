@@ -2,3 +2,7 @@
 Cargo.lock
 cognitive_memory/
 *.swp
+*.jsonl
+learned_keywords.json
+semantic_network.json
+*.bak
