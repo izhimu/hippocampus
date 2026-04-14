@@ -67,6 +67,15 @@ impl Reflector {
         // 4. vacuum
         let vacuum = self.vacuum();
 
+        // 5. 🧠 学习关键词：从所有印迹中批量学习
+        let mut kw = crate::learned_keywords::LearnedKeywords::load(&self.config.learned_keywords_path);
+        let all_for_learn = self.store.read_all().unwrap_or_default();
+        for e in &all_for_learn {
+            kw.update_from_engram(&e.content);
+        }
+        kw.refine();
+        let _ = kw.save(&self.config.learned_keywords_path);
+
         ReflectResult {
             semantic_network_learned: learned,
             pruned,

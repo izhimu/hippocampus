@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::config::HippocampusConfig;
 use crate::emotion;
+use crate::learned_keywords::LearnedKeywords;
 use crate::search::tokenize;
 use crate::store::EngramStore;
 
@@ -67,9 +68,17 @@ impl<'a> MemoryGate<'a> {
         let pfc = self.prefrontal_evaluate(message, session_context);
         let tmp = self.temporal_evaluate(message);
 
+        // 🧠 学习加分：learned keywords boost（在上限内叠加到前额叶）
+        let mut learned = LearnedKeywords::load(&self.config.learned_keywords_path);
+        let learned_boost: f64 = tokenize(message)
+            .iter()
+            .map(|w| learned.get_boost(w))
+            .sum::<f64>()
+            .min(0.3);
+
         let decision_score = amy.score * 0.35
             + hip.score * 0.30
-            + pfc.score * 0.20
+            + (pfc.score + learned_boost).min(1.0) * 0.20
             + tmp.score * 0.15;
 
         let has_mem_intent = ["记住","记一下","帮我记","需要记住","别忘了","务必记住"].iter().any(|w| message.contains(w));
@@ -80,23 +89,26 @@ impl<'a> MemoryGate<'a> {
         let should_remember = decision_score >= self.config.auto_memory_threshold;
         let tags = extract_tags(message, &emotion_name);
 
-        let mut reasons = vec![];
-        if amy.score >= 0.5 { reasons.push("杏仁核：强情绪"); }
-        if hip.score >= 0.5 { reasons.push("海马体：高新奇度"); }
-        if pfc.score >= 0.5 { reasons.push("前额叶：话题相关"); }
-        if tmp.score >= 0.5 { reasons.push("颞叶：社交内容"); }
+        let mut reasons: Vec<String> = vec![];
+        if amy.score >= 0.5 { reasons.push("杏仁核：强情绪".to_string()); }
+        if hip.score >= 0.5 { reasons.push("海马体：高新奇度".to_string()); }
+        if pfc.score >= 0.5 { reasons.push("前额叶：话题相关".to_string()); }
+        if tmp.score >= 0.5 { reasons.push("颞叶：社交内容".to_string()); }
+        if learned_boost > 0.01 { reasons.push(format!("学习加分({:.2})", learned_boost)); }
 
         let reason = if reasons.is_empty() {
             if should_remember { "综合达标".into() } else { "不满足记忆阈值".into() }
         } else {
-            reasons.join("，")
+            reasons.join(",")
         };
 
-        MemoryDecision {
+        let decision_score = (decision_score * 10000.0).round() / 10000.0;
+
+        let result = MemoryDecision {
             should_remember,
             importance,
             tags,
-            decision_score: (decision_score * 10000.0).round() / 10000.0,
+            decision_score,
             emotion: emotion_name,
             emotion_score: amy.score,
             reason,
@@ -106,7 +118,12 @@ impl<'a> MemoryGate<'a> {
                 prefrontal: pfc,
                 temporal: tmp,
             },
-        }
+        };
+
+        // 🧠 实时学习：更新 learned keywords
+        learned.update_from_gate(message, &result);
+        let _ = learned.save(&self.config.learned_keywords_path);
+        result
     }
 
     // --- 杏仁核 ---

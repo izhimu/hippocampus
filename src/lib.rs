@@ -2,6 +2,7 @@ pub mod config;
 pub mod dedup;
 pub mod emotion;
 pub mod engram;
+pub mod learned_keywords;
 pub mod memory_gate;
 pub mod reconsolidation;
 pub mod scoring;
@@ -19,6 +20,7 @@ pub use dedup::Deduplicator;
 pub use memory_gate::{MemoryGate, MemoryDecision, BrainComponents, BrainRegion};
 pub use reconsolidation::Reconsolidation;
 pub use session::{Session, SessionManager};
+pub use learned_keywords::LearnedKeywords;
 pub use reflect::{Reflector, ReflectResult, VacuumResult};
 pub use scoring::{decay, final_score, half_life_for_importance, importance_score, ltp_boost};
 

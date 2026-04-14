@@ -18,6 +18,8 @@ pub struct HippocampusConfig {
     pub synonyms_path: PathBuf,
     /// 语义网络路径
     pub semantic_network_path: PathBuf,
+    /// 学习关键词路径
+    pub learned_keywords_path: PathBuf,
     /// 分层文件名
     pub layer_files: HashMap<String, String>,
 
@@ -70,6 +72,7 @@ impl HippocampusConfig {
 
         let synonyms_path = cognitive_dir.join("synonyms.json");
         let semantic_network_path = cognitive_dir.join("semantic_network.json");
+        let learned_keywords_path = cognitive_dir.join("learned_keywords.json");
 
         let mut layer_files = HashMap::new();
         layer_files.insert("L1".into(), "engrams_L1.jsonl".into());
@@ -81,6 +84,7 @@ impl HippocampusConfig {
             workspace,
             synonyms_path,
             semantic_network_path,
+            learned_keywords_path,
             layer_files,
             l1_max_age_hours: 24,
             vacuum_min_score: 0.1,

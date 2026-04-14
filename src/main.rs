@@ -54,6 +54,7 @@ fn print_usage() {
     eprintln!("  hippocampus gate --message \"...\" [--write] [--force] [--session-id X]");
     eprintln!("  hippocampus install [--openclaw] [--claude] [--all]");
     eprintln!("  hippocampus stats");
+    eprintln!("  hippocampus learned [--top N] [--reset]");
     eprintln!("  hippocampus vacuum");
     eprintln!();
     eprintln!("Env: HIPPOCAMPUS_HOME (default: ~/.hippocampus)");
@@ -72,6 +73,7 @@ fn run_cmd(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Error>>
         "stats" => cmd_stats(),
         "install" => cmd_install(args),
         "vacuum" => cmd_vacuum(),
+        "learned" => cmd_learned(args),
         _ => {
             eprintln!("Unknown command: {}", cmd);
             print_usage();
@@ -380,6 +382,40 @@ fn cmd_install(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let status = if failed.is_empty() { "ok" } else { "partial" };
     let msg = if failed.is_empty() { "✅ 安装完成".to_string() } else { format!("⚠️ {} 项失败", failed.len()) };
     print_json(&serde_json::json!({"status": status, "installed": installed, "skipped": skipped, "failed": failed, "message": msg}));
+    Ok(())
+}
+
+fn cmd_learned(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let home = get_home();
+    let config = hippocampus::HippocampusConfig::new(None, Some(&home));
+    let path = &config.learned_keywords_path;
+
+    if has_flag(args, "--reset") {
+        std::fs::remove_file(path)?;
+        print_json(&serde_json::json!({
+            "status": "ok",
+            "message": "🗑️ 学习数据已清空"
+        }));
+        return Ok(());
+    }
+
+    let top_n: usize = arg_val(args, "--top").and_then(|v| v.parse().ok()).unwrap_or(50);
+    let learned = hippocampus::LearnedKeywords::load(path);
+    let (word_count, cooc_count) = learned.stats();
+    let top = learned.top_keywords(top_n);
+
+    print_json(&serde_json::json!({
+        "status": "ok",
+        "total_words": word_count,
+        "total_cooccurrences": cooc_count,
+        "top_keywords": top.iter().map(|(w, boost, freq)| serde_json::json!({
+            "word": w,
+            "boost": boost,
+            "freq": freq,
+            "intent": learned.cooccurrence.get(w).map(|e| e.with_intent).unwrap_or(0),
+            "decision": learned.cooccurrence.get(w).map(|e| e.with_decision).unwrap_or(0),
+        })).collect::<Vec<_>>()
+    }));
     Ok(())
 }
 
