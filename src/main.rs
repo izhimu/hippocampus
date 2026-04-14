@@ -488,7 +488,7 @@ fn cmd_import(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
     let mut hippo = hippocampus::Hippocampus::new(&home)?;
     let mut details = Vec::new();
-    let mut files_scanned = 0u32;
+    let files_scanned: u32;
     let mut files_imported = 0u32;
     let mut engrams_created = 0u32;
     let mut tests_cleaned = 0u32;

@@ -78,7 +78,7 @@ impl LearnedKeywords {
     }
 
     /// gate 评估后实时更新（核心！）
-    pub fn update_from_gate(&mut self, content: &str, decision: &MemoryDecision) {
+    pub fn update_from_gate(&mut self, content: &str, _decision: &MemoryDecision) {
         let tokens = tokenize(content);
         let now = now_iso();
 
