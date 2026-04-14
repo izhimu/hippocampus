@@ -183,11 +183,11 @@ fn is_cjk(ch: char) -> bool {
 // --- BM25 Index ---
 
 struct BM25Index {
-    doc_count: usize,
+    _doc_count: usize,
     avg_dl: f64,
     idf: HashMap<String, f64>,
-    doc_tf: Vec<HashMap<String, u32>>,
-    doc_lengths: Vec<usize>,
+    _doc_tf: Vec<HashMap<String, u32>>,
+    _doc_lengths: Vec<usize>,
 }
 
 impl BM25Index {
@@ -222,7 +222,7 @@ impl BM25Index {
             })
             .collect();
 
-        Self { doc_count, avg_dl, idf, doc_tf, doc_lengths }
+        Self { _doc_count: doc_count, avg_dl, idf, _doc_tf: doc_tf, _doc_lengths: doc_lengths }
     }
 
     fn score(&self, query_tokens: &[String], content: &str) -> f64 {

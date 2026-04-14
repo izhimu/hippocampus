@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, BufRead, Write};
-use std::path::Path;
-
 use crate::config::HippocampusConfig;
 use crate::engram::Engram;
 
