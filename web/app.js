@@ -393,10 +393,10 @@
                     document.getElementById('decision-score').textContent = data.decision_score.toFixed(3);
                     const badge = document.getElementById('decision-badge');
                     if (data.should_remember) {
-                        badge.textContent = 'REMEMBER';
+                        badge.textContent = '已记忆';
                         badge.className = 'text-xs px-2 py-0.5 rounded-full badge-remember';
                     } else {
-                        badge.textContent = 'REJECTED';
+                        badge.textContent = '已拒绝';
                         badge.className = 'text-xs px-2 py-0.5 rounded-full badge-reject';
                     }
                 }
@@ -439,10 +439,10 @@
             document.getElementById('decision-score').textContent = ds.toFixed(3);
             const badge = document.getElementById('decision-badge');
             if (data.should_remember) {
-                badge.textContent = 'REMEMBER';
+                badge.textContent = '已记忆';
                 badge.className = 'text-xs px-2 py-0.5 rounded-full badge-remember';
             } else {
-                badge.textContent = 'REJECTED';
+                badge.textContent = '已拒绝';
                 badge.className = 'text-xs px-2 py-0.5 rounded-full badge-reject';
             }
 
@@ -471,12 +471,12 @@
         const body = document.getElementById('gate-result-body');
         const card = document.getElementById('gate-result-card');
 
-        title.textContent = data.should_remember ? 'Remembered' : 'Rejected';
+        title.textContent = data.should_remember ? '已记忆' : '已拒绝';
         title.style.color = data.should_remember ? '#4ade80' : '#f87171';
         card.style.borderColor = data.should_remember ? 'rgba(74,222,128,0.3)' : 'rgba(248,113,113,0.3)';
 
-        let html = `<p>Score: <strong>${(data.decision_score || 0).toFixed(3)}</strong></p>`;
-        html += `<p>Importance: ${data.importance || 0} | Emotion: ${data.emotion || 'neutral'}</p>`;
+        let html = `<p>评分: <strong>${(data.decision_score || 0).toFixed(3)}</strong></p>`;
+        html += `<p>重要度: ${data.importance || 0} | 情感: ${data.emotion || 'neutral'}</p>`;
         html += `<p class="text-gray-400">${data.reason || ''}</p>`;
         body.innerHTML = html;
 
@@ -522,7 +522,7 @@
             }
 
             if (results.length === 0) {
-                container.innerHTML = '<div class="text-gray-500">No results found</div>';
+                container.innerHTML = '<div class="text-gray-500">未找到相关记忆</div>';
             }
         } catch (e) {
             console.error('search error:', e);
@@ -553,7 +553,7 @@
             }
 
             if (engrams.length === 0) {
-                container.innerHTML = '<div class="text-gray-600 text-sm">No memories in ' + layer + '</div>';
+                container.innerHTML = '<div class="text-gray-600 text-sm">' + layer + ' 层暂无记忆</div>';
             }
         } catch (e) {
             console.error('loadEngrams error:', e);
@@ -622,10 +622,10 @@
                     document.getElementById('decision-score').textContent = (data.decision_score || 0).toFixed(3);
                     const badge = document.getElementById('decision-badge');
                     if (data.should_remember) {
-                        badge.textContent = 'REMEMBER';
+                        badge.textContent = '已记忆';
                         badge.className = 'text-xs px-2 py-0.5 rounded-full badge-remember';
                     } else {
-                        badge.textContent = 'REJECTED';
+                        badge.textContent = '已拒绝';
                         badge.className = 'text-xs px-2 py-0.5 rounded-full badge-reject';
                     }
                 }
