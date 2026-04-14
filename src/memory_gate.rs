@@ -72,7 +72,11 @@ impl<'a> MemoryGate<'a> {
             + pfc.score * 0.20
             + tmp.score * 0.15;
 
-        let importance = (decision_score * 10.0).clamp(1.0, 10.0) as u8;
+        let has_mem_intent = ["记住","记一下","帮我记","需要记住","别忘了","务必记住"].iter().any(|w| message.contains(w));
+        let has_decision = ["决定","选择","以后","固定","定期","不再","改为","取消","打算"].iter().any(|w| message.contains(w));
+        let mut importance = (decision_score * 10.0).clamp(1.0, 10.0) as u8;
+        if has_mem_intent { importance = importance.max(7); }
+        else if has_decision { importance = importance.max(5); }
         let should_remember = decision_score >= self.config.auto_memory_threshold;
         let tags = extract_tags(message, &emotion_name);
 
@@ -178,12 +182,36 @@ impl<'a> MemoryGate<'a> {
 
     // --- 前额叶 ---
     fn prefrontal_evaluate(&self, message: &str, session_context: &[String]) -> BrainRegion {
-        if session_context.is_empty() {
-            return BrainRegion { score: 0.3, reason: "无上下文参考".into() };
+        // 记忆意图检测（最高优先级）
+        let mem_intent = ["记住","记一下","帮我记","需要记住","别忘了","记住这","记着","记住，","务必记住"];
+        let has_mem_intent = mem_intent.iter().any(|w| message.contains(w));
+
+        // 决策词检测
+        let decision_words = ["决定","选择","以后","固定","定期","不再","改为","取消","以后","开始","要","打算"];
+        let decision_count = decision_words.iter().filter(|w| message.contains(**w)).count();
+
+        let mut reasons = vec![];
+        let mut intent_bonus = 0.0;
+
+        if has_mem_intent {
+            intent_bonus += 0.5; // 强记忆意图直接+0.5
+            reasons.push("明确记忆意图".into());
         }
+        if decision_count > 0 {
+            intent_bonus += (decision_count as f64 * 0.12).min(0.3); // 决策词每个+0.12，上限0.3
+            reasons.push(format!("含{}个决策词", decision_count));
+        }
+
+        if session_context.is_empty() {
+            // 无上下文时，仅靠意图加分
+            let score = (0.3 + intent_bonus).min(1.0);
+            return BrainRegion { score, reason: if reasons.is_empty() { "无上下文参考".into() } else { reasons.join("，") } };
+        }
+
         let words = tokenize(message);
         if words.is_empty() {
-            return BrainRegion { score: 0.1, reason: "无有效词汇".into() };
+            let score = (0.1 + intent_bonus).min(1.0);
+            return BrainRegion { score, reason: if reasons.is_empty() { "无有效词汇".into() } else { reasons.join("，") } };
         }
 
         let mut session_words: HashMap<String, u32> = HashMap::new();
@@ -209,9 +237,9 @@ impl<'a> MemoryGate<'a> {
             else if len <= 500 { 0.7 }
             else { 0.0 };
 
-        let score = topic_relevance * 0.4 + progress * 0.35 + length * 0.25;
+        let base_score = topic_relevance * 0.4 + progress * 0.35 + length * 0.25;
+        let score = (base_score + intent_bonus).min(1.0);
 
-        let mut reasons = vec![];
         if topic_relevance > 0.5 { reasons.push(format!("话题匹配({:.0}%)", topic_relevance * 100.0)); }
         if progress < 0.3 { reasons.push("内容重复".into()); }
         if length > 0.8 { reasons.push("长度适中".into()); }
