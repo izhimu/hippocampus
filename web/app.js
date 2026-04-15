@@ -115,8 +115,8 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
         scene.background = new THREE.Color(0x020205);
 
         camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera.position.set(0, 0.8, 7.0);
-
+        const isMobile = window.innerWidth < 768;
+        camera.position.set(0, isMobile ? 1.5 : 0.8, isMobile ? 10.0 : 7.0);
 
         renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -136,7 +136,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
         controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
         controls.autoRotate = true;
-        controls.autoRotateSpeed = 0.2;
+        controls.autoRotateSpeed = isMobile ? 0.1 : 0.2;
         controls.enablePan = false;
 
         createNeuralSystem();

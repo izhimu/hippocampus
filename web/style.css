@@ -192,3 +192,31 @@ body::after {
 
 .typewriter-cursor::after { content: '|'; animation: blink 1s step-end infinite; color: var(--cyan); }
 @keyframes blink { 50% { opacity: 0; } }
+
+/* --- Mobile Adaptation --- */
+@media (max-width: 768px) {
+    :root {
+        --f-g1: 1.125rem;
+        --f-g2: 0.875rem;
+    }
+    
+    body {
+        overflow-y: auto !important;
+        overflow-x: hidden;
+        height: auto;
+    }
+
+    /* Mobile Custom Scrollbar */
+    body::-webkit-scrollbar { width: 4px; }
+    body::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.2); }
+    body::-webkit-scrollbar-thumb { background: rgba(0, 243, 255, 0.3); border-radius: 10px; }
+    
+    .hud-panel {
+        padding: 15px;
+    }
+
+    #panel-left, #panel-right {
+        transform: none !important;
+        opacity: 1 !important;
+    }
+}
