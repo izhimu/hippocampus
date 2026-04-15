@@ -17,8 +17,11 @@ fn notify_gateway(payload: &serde_json::Value) {
     let payload_clone = payload.clone();
     // 在新线程中执行，避免阻塞 CLI 主逻辑，同时设置极短超时以应对 gateway 未启动的情况
     std::thread::spawn(move || {
-        let _ = ureq::post("http://localhost:8088/api/notify")
-            .timeout(std::time::Duration::from_millis(500))
+        let config = ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_millis(500)))
+            .build();
+        let agent: ureq::Agent = config.into();
+        let _ = agent.post("http://localhost:8088/api/notify")
             .send_json(payload_clone);
     });
 }

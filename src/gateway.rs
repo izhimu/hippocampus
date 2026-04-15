@@ -376,7 +376,7 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
                 }
             }
             _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
-                if socket.send(Message::Ping(vec![])).await.is_err() {
+                if socket.send(Message::Ping(vec![].into())).await.is_err() {
                     break;
                 }
             }
