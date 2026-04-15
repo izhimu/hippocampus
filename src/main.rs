@@ -301,7 +301,20 @@ fn cmd_gate(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     print_json(&output);
     // 无论是否写入，都通知 Gateway 进行 3D 脑区动效同步
     let mut notify_payload = output.clone();
-    notify_payload["type"] = serde_json::json!("gate"); 
+    // 如果执行了写入，则标记为 gate_execute 触发 Web 端全量刷新，否则仅标记为 gate 做脑波动效
+    notify_payload["type"] = if do_write || force { 
+        serde_json::json!("gate_execute") 
+    } else { 
+        serde_json::json!("gate") 
+    };
+    
+    // 扁平化 components 结构以匹配 Web 端处理逻辑 (data.components[k] 应为 score 数值)
+    notify_payload["components"] = serde_json::json!({
+        "amygdala": decision.components.amygdala.score,
+        "hippocampus": decision.components.hippocampus.score,
+        "prefrontal": decision.components.prefrontal.score,
+        "temporal": decision.components.temporal.score,
+    });
     notify_gateway(&notify_payload);
     
     Ok(())
