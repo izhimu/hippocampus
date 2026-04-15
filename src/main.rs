@@ -165,6 +165,31 @@ fn cmd_recall(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         emotion_filter.as_deref(),
         with_context.as_deref(),
     );
+
+    // --- 模拟大脑检索状态并通知 Gateway ---
+    // 1. 计算召回结果的平均情绪强度
+    let avg_emotion: f64 = if results.is_empty() {
+        0.1
+    } else {
+        results.iter()
+            .filter_map(|r| r.get("emotion_score").and_then(|v| v.as_f64()))
+            .sum::<f64>() / (results.len() as f64)
+    };
+
+    // 2. 发送 recall 专用同步信号
+    notify_gateway(&serde_json::json!({
+        "type": "gate", // 借用 gate 类型来触发 3D 动效
+        "components": {
+            "amygdala": avg_emotion.max(0.2), // 根据结果情绪决定
+            "hippocampus": 0.95,             // 检索核心，极高活跃
+            "prefrontal": 0.75,              // 策略控制，高活跃
+            "temporal": 0.5,                 // 语义处理，中活跃
+        },
+        "decision_score": 0.0,
+        "should_remember": false,
+        "reason": format!("正在检索: {}", query)
+    }));
+
     if brief {
         for r in &results {
             let score = r.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
