@@ -129,13 +129,21 @@ fn cmd_remember(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let home = get_home();
     let mut hippo = hippocampus::Hippocampus::new(&home)?;
     let id = hippo.remember(&content, importance, &source, &tags, session_id.as_deref(), &layer, permanent)?;
-    print_json(&serde_json::json!({
+    let res_json = serde_json::json!({
         "status": "ok",
         "engram_id": id,
         "content": content,
         "importance": importance,
         "layer": layer,
         "permanent": permanent,
+    });
+    print_json(&res_json);
+    
+    // 通知 Gateway
+    notify_gateway(&serde_json::json!({
+        "type": "hook_event", // 借用 hook_event 类型触发刷新
+        "hook_type": "remember",
+        "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
     }));
     Ok(())
 }
@@ -184,13 +192,21 @@ fn cmd_reflect(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let home = get_home();
     let mut hippo = hippocampus::Hippocampus::new(&home)?;
     let result = hippo.reflect(days)?;
-    print_json(&serde_json::json!({
+    let res_json = serde_json::json!({
         "status": "ok",
         "days": days,
         "semantic_network_learned": result.semantic_network_learned,
         "pruned": result.pruned,
         "reconsolidated": result.reconsolidated,
         "vacuum": result.vacuum,
+    });
+    print_json(&res_json);
+    
+    // 通知 Gateway
+    notify_gateway(&serde_json::json!({
+        "type": "hook_event",
+        "hook_type": "reflect",
+        "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
     }));
     Ok(())
 }
@@ -283,7 +299,11 @@ fn cmd_gate(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     print_json(&output);
-    notify_gateway(&output);
+    // 无论是否写入，都通知 Gateway 进行 3D 脑区动效同步
+    let mut notify_payload = output.clone();
+    notify_payload["type"] = serde_json::json!("gate"); 
+    notify_gateway(&notify_payload);
+    
     Ok(())
 }
 
