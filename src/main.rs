@@ -12,6 +12,17 @@ fn print_json<T: serde::Serialize>(val: &T) {
     println!("{}", serde_json::to_string_pretty(val).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e)));
 }
 
+/// 通知 Gateway 发生了更新（实现 CLI 和 Web 同步，跨平台支持）
+fn notify_gateway(payload: &serde_json::Value) {
+    let payload_clone = payload.clone();
+    // 在新线程中执行，避免阻塞 CLI 主逻辑，同时设置极短超时以应对 gateway 未启动的情况
+    std::thread::spawn(move || {
+        let _ = ureq::post("http://localhost:8088/api/notify")
+            .timeout(std::time::Duration::from_millis(500))
+            .send_json(payload_clone);
+    });
+}
+
 /// 从 args 中找 --flag 的值（支持 --flag value 格式）
 fn arg_val(args: &[String], flag: &str) -> Option<String> {
     for i in 0..args.len() {
@@ -269,6 +280,7 @@ fn cmd_gate(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     print_json(&output);
+    notify_gateway(&output);
     Ok(())
 }
 
@@ -843,5 +855,13 @@ fn cmd_hook(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         },
         _ => {}
     }
+
+    // 发送同步通知给 Gateway
+    notify_gateway(&serde_json::json!({
+        "type": "hook_event",
+        "hook_type": hook_type,
+        "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+    }));
+
     Ok(())
 }
