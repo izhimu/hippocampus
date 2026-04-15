@@ -1,4 +1,4 @@
-// Hippocampus Gateway — Three.js 3D Brain Visualization
+// Hippocampus Gateway — Three.js 3D Brain Visualization (Redesigned)
 (function () {
     'use strict';
 
@@ -6,23 +6,28 @@
     const REGIONS = {
         amygdala: {
             color: 0xff4444, emissive: 0x661111,
-            position: [0, -0.6, 0.6], radius: 0.45,
-            weight: 0.35, label: 'Amygdala',
+            position: [0, -0.45, 0.35], radius: 0.35,
+            weight: 0.35, label: '杏仁核',
+            // position on brain surface for marker
+            surfaceAngle: { theta: Math.PI * 0.7, phi: Math.PI * 0.35 },
         },
         hippocampus: {
             color: 0xffd700, emissive: 0x665500,
-            position: [0, 0.25, 0], radius: 0.55,
-            weight: 0.30, label: 'Hippocampus',
+            position: [0, 0.05, 0.9], radius: 0.4,
+            weight: 0.30, label: '海马体',
+            surfaceAngle: { theta: Math.PI * 0.45, phi: Math.PI * 0.15 },
         },
         prefrontal: {
             color: 0x4488ff, emissive: 0x112266,
-            position: [0, 1.3, 1.1], radius: 0.50,
-            weight: 0.20, label: 'Prefrontal',
+            position: [0, 0.6, 1.4], radius: 0.38,
+            weight: 0.20, label: '前额叶',
+            surfaceAngle: { theta: Math.PI * 0.3, phi: 0 },
         },
         temporal: {
             color: 0x44ff88, emissive: 0x116633,
-            position: [-1.3, 0.2, -0.2], radius: 0.42,
-            weight: 0.15, label: 'Temporal',
+            position: [-1.35, -0.1, 0.3], radius: 0.35,
+            weight: 0.15, label: '颞叶',
+            surfaceAngle: { theta: Math.PI * 0.55, phi: Math.PI * 0.8 },
         },
     };
 
@@ -30,41 +35,50 @@
 
     // --- Three.js Setup ---
     let scene, camera, renderer, clock;
-    let brainMeshes = {};
-    let brainGlows = {};
-    let connectionLines = [];
-    let particles;
-    let particlePositions, particleVelocities;
-    const PARTICLE_COUNT = 300;
+    let brainGroup, brainHemisphereL, brainHemisphereR;
+    let regionMarkers = {};
+    let regionGlows = {};
+    let neuralParticles, neuralLines;
+    let starField;
+    const NEURAL_COUNT = 600;
+    const STAR_COUNT = 2000;
 
     // State
-    let animationState = 'idle'; // idle | activating | high_score | writing | rejected
+    let animationState = 'idle';
     let activationQueue = [];
     let activationTimer = 0;
     let breathPhase = 0;
     let scores = { amygdala: 0, hippocampus: 0, prefrontal: 0, temporal: 0 };
+    let rejectFlash = 0;
+    let writeConverge = 0;
+    let burstActive = 0;
+
+    // Neural particle data
+    let nPositions, nColors, nSizes, nVelocities, nBasePositions;
 
     function init() {
         scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x050510);
-        scene.fog = new THREE.FogExp2(0x050510, 0.15);
+        scene.background = new THREE.Color(0x020208);
 
-        camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
-        camera.position.set(0, 0.5, 4.5);
-        camera.lookAt(0, 0.3, 0.2);
+        camera = new THREE.PerspectiveCamera(50, 1, 0.1, 200);
+        camera.position.set(0, 0.8, 4.2);
+        camera.lookAt(0, 0.2, 0);
 
-        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.2;
         const container = document.getElementById('canvas-container');
         renderer.setSize(container.clientWidth, container.clientHeight);
         container.appendChild(renderer.domElement);
 
         clock = new THREE.Clock();
 
+        createStarField();
+        createBrain();
+        createRegionMarkers();
+        createNeuralNetwork();
         setupLighting();
-        createBrainRegions();
-        createConnections();
-        createParticles();
 
         window.addEventListener('resize', onResize);
         onResize();
@@ -78,272 +92,495 @@
 
     function onResize() {
         const container = document.getElementById('canvas-container');
-        const w = container.clientWidth;
-        const h = container.clientHeight;
+        const w = container.clientWidth, h = container.clientHeight;
         camera.aspect = w / h;
         camera.updateProjectionMatrix();
         renderer.setSize(w, h);
     }
 
-    // --- Lighting ---
-    function setupLighting() {
-        const ambient = new THREE.AmbientLight(0x222244, 0.8);
-        scene.add(ambient);
-
-        const dir = new THREE.DirectionalLight(0xffffff, 0.6);
-        dir.position.set(3, 5, 4);
-        scene.add(dir);
-
-        const back = new THREE.PointLight(0x4444ff, 0.4, 10);
-        back.position.set(-3, -2, -3);
-        scene.add(back);
-
-        // Region point lights
-        for (const key of REGION_KEYS) {
-            const r = REGIONS[key];
-            const light = new THREE.PointLight(r.color, 0.3, 3);
-            light.position.set(r.position[0], r.position[1], r.position[2]);
-            scene.add(light);
+    // --- Star Field ---
+    function createStarField() {
+        const positions = new Float32Array(STAR_COUNT * 3);
+        const colors = new Float32Array(STAR_COUNT * 3);
+        for (let i = 0; i < STAR_COUNT; i++) {
+            const r = 30 + Math.random() * 70;
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(2 * Math.random() - 1);
+            positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+            positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+            positions[i * 3 + 2] = r * Math.cos(phi);
+            const bright = 0.3 + Math.random() * 0.7;
+            const tint = Math.random();
+            colors[i * 3] = bright * (tint > 0.8 ? 1 : 0.8);
+            colors[i * 3 + 1] = bright * 0.85;
+            colors[i * 3 + 2] = bright * (tint < 0.3 ? 1 : 0.9);
         }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        const mat = new THREE.PointsMaterial({
+            size: 0.15, vertexColors: true,
+            transparent: true, opacity: 0.9,
+            blending: THREE.AdditiveBlending, depthWrite: false,
+        });
+        starField = new THREE.Points(geo, mat);
+        scene.add(starField);
     }
 
-    // --- Brain Regions ---
-    function createBrainRegions() {
+    // --- Brain Shape (displaced ellipsoid) ---
+    function brainDisplacement(x, y, z) {
+        // Base ellipsoid: wider left-right, taller front-back
+        const nx = x / 1.45, ny = y / 1.25, nz = z / 1.3;
+        let d = Math.sqrt(nx * nx + ny * ny + nz * nz) - 1.0;
+
+        // Squish bottom slightly
+        if (y < -0.2) d += (y + 0.2) * -0.15;
+
+        // Central fissure (longitudinal) - slight indent along top middle
+        const fissure = Math.exp(-x * x / 0.01) * Math.max(0, y - 0.1) * 0.15;
+        d -= fissure;
+
+        // Lateral sulcus (side groove)
+        const lateralY = -0.15;
+        const lateralZ = 0.3;
+        const lateralDist = Math.sqrt((y - lateralY) * (y - lateralY) + (z - lateralZ) * (z - lateralZ));
+        const lateral = Math.exp(-lateralDist * lateralDist / 0.08) * 0.12;
+        d -= lateral * (1 - Math.abs(x) / 1.5);
+
+        // Frontal lobe bump
+        const frontalBump = Math.exp(-((z - 1.2) * (z - 1.2) + (y - 0.4) * (y - 0.4)) / 0.5) * 0.15;
+        d -= frontalBump;
+
+        // Temporal lobe bump
+        const temporalBump = Math.exp(-((x * x) + (y + 0.3) * (y + 0.3)) / 0.6) * 0.08 * (1 - Math.max(0, z - 0.8) / 1.0);
+        d -= temporalBump;
+
+        // Gyri wrinkles (surface noise)
+        const wrinkle = Math.sin(x * 12 + y * 8) * Math.cos(y * 10 + z * 6) * 0.02;
+        d += wrinkle;
+
+        // Cerebellum bump (back-bottom)
+        const cerebBump = Math.exp(-((z + 1.0) * (z + 1.0) + (y + 0.5) * (y + 0.5) + x * x * 0.3) / 0.3) * 0.2;
+        d -= cerebBump;
+
+        return d;
+    }
+
+    function createBrain() {
+        brainGroup = new THREE.Group();
+        scene.add(brainGroup);
+
+        // Left hemisphere
+        brainHemisphereL = createHemisphere(1);
+        brainHemisphereL.position.x = -0.08;
+        brainGroup.add(brainHemisphereL);
+
+        // Right hemisphere
+        brainHemisphereR = createHemisphere(-1);
+        brainHemisphereR.position.x = 0.08;
+        brainGroup.add(brainHemisphereR);
+
+        // Inner glow core
+        const coreGeo = new THREE.SphereGeometry(0.5, 24, 24);
+        const coreMat = new THREE.MeshBasicMaterial({
+            color: 0x2233aa,
+            transparent: true,
+            opacity: 0.06,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+        });
+        const core = new THREE.Mesh(coreGeo, coreMat);
+        brainGroup.add(core);
+    }
+
+    function createHemisphere(side) {
+        // Use IcosahedronGeometry for organic look, then displace vertices
+        const geo = new THREE.IcosahedronGeometry(1.4, 4);
+        const pos = geo.attributes.position;
+
+        for (let i = 0; i < pos.count; i++) {
+            let x = pos.getX(i) * side;
+            let y = pos.getY(i);
+            let z = pos.getZ(i);
+
+            // Only keep this hemisphere side
+            if (x * side < -0.05) {
+                x *= 0.7;
+            }
+
+            const d = brainDisplacement(x, y, z);
+            const scale = 1.0 + d * 0.5;
+            pos.setXYZ(i, x * scale, y * scale, z * scale);
+        }
+
+        geo.computeVertexNormals();
+
+        // Semi-transparent outer shell
+        const mat = new THREE.MeshPhysicalMaterial({
+            color: 0x887799,
+            emissive: 0x110822,
+            transparent: true,
+            opacity: 0.18,
+            roughness: 0.7,
+            metalness: 0.1,
+            clearcoat: 0.3,
+            clearcoatRoughness: 0.5,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+        });
+
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.userData.baseOpacity = 0.18;
+        return mesh;
+    }
+
+    // --- Region Markers on brain surface ---
+    function createRegionMarkers() {
         for (const key of REGION_KEYS) {
             const r = REGIONS[key];
 
-            // Main sphere
-            const geo = new THREE.SphereGeometry(r.radius, 32, 32);
-            const mat = new THREE.MeshPhongMaterial({
+            // Main marker sphere
+            const geo = new THREE.SphereGeometry(r.radius * 0.8, 24, 24);
+            const mat = new THREE.MeshPhysicalMaterial({
                 color: r.color,
                 emissive: r.emissive,
+                emissiveIntensity: 0.5,
                 transparent: true,
-                opacity: 0.65,
-                shininess: 80,
+                opacity: 0.55,
+                roughness: 0.3,
+                metalness: 0.2,
+                clearcoat: 0.6,
+                depthWrite: false,
             });
             const mesh = new THREE.Mesh(geo, mat);
             mesh.position.set(r.position[0], r.position[1], r.position[2]);
-            mesh.userData = { key, baseScale: 1 };
-            scene.add(mesh);
-            brainMeshes[key] = mesh;
+            mesh.userData = { key, baseOpacity: 0.55, baseScale: 1 };
+            brainGroup.add(mesh);
+            regionMarkers[key] = mesh;
 
-            // Glow sphere (larger, more transparent)
-            const glowGeo = new THREE.SphereGeometry(r.radius * 1.6, 24, 24);
+            // Outer glow
+            const glowGeo = new THREE.SphereGeometry(r.radius * 1.8, 20, 20);
             const glowMat = new THREE.MeshBasicMaterial({
                 color: r.color,
                 transparent: true,
-                opacity: 0.08,
+                opacity: 0.06,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
             });
-            const glowMesh = new THREE.Mesh(glowGeo, glowMat);
-            glowMesh.position.copy(mesh.position);
-            scene.add(glowMesh);
-            brainGlows[key] = glowMesh;
+            const glow = new THREE.Mesh(glowGeo, glowMat);
+            glow.position.copy(mesh.position);
+            glow.userData = { baseOpacity: 0.06 };
+            brainGroup.add(glow);
+            regionGlows[key] = glow;
         }
     }
 
-    // --- Connections ---
-    function createConnections() {
-        const pairs = [
-            ['amygdala', 'hippocampus'],
-            ['hippocampus', 'prefrontal'],
-            ['prefrontal', 'temporal'],
-            ['amygdala', 'prefrontal'],
-            ['hippocampus', 'temporal'],
-            ['amygdala', 'temporal'],
-        ];
+    // --- Neural Network (particles + connection lines) ---
+    function createNeuralNetwork() {
+        nPositions = new Float32Array(NEURAL_COUNT * 3);
+        nColors = new Float32Array(NEURAL_COUNT * 3);
+        nSizes = new Float32Array(NEURAL_COUNT);
+        nBasePositions = [];
+        nVelocities = [];
 
-        for (const [a, b] of pairs) {
-            const ra = REGIONS[a];
-            const rb = REGIONS[b];
-            const thickness = (ra.weight + rb.weight) / 2;
-
-            const points = [
-                new THREE.Vector3(...ra.position),
-                new THREE.Vector3(...rb.position),
-            ];
-            const geo = new THREE.BufferGeometry().setFromPoints(points);
-            const mat = new THREE.LineBasicMaterial({
-                color: 0x4466aa,
-                transparent: true,
-                opacity: 0.15 + thickness * 0.5,
-            });
-            const line = new THREE.Line(geo, mat);
-            line.userData = { thickness };
-            scene.add(line);
-            connectionLines.push(line);
-        }
-    }
-
-    // --- Particles ---
-    function createParticles() {
-        const positions = new Float32Array(PARTICLE_COUNT * 3);
-        const velocities = [];
-
-        for (let i = 0; i < PARTICLE_COUNT; i++) {
-            // Random position around brain center
+        for (let i = 0; i < NEURAL_COUNT; i++) {
+            // Distribute within brain volume
             const angle = Math.random() * Math.PI * 2;
-            const radius = 0.8 + Math.random() * 2.0;
-            const y = (Math.random() - 0.5) * 3;
+            const r = Math.pow(Math.random(), 0.5) * 1.3;
+            const y = (Math.random() - 0.5) * 2.2;
+            const x = Math.cos(angle) * r * (Math.random() > 0.5 ? 1 : -0.9);
+            const z = Math.sin(angle) * r;
 
-            positions[i * 3] = Math.cos(angle) * radius;
-            positions[i * 3 + 1] = y;
-            positions[i * 3 + 2] = Math.sin(angle) * radius;
+            nPositions[i * 3] = x;
+            nPositions[i * 3 + 1] = y;
+            nPositions[i * 3 + 2] = z;
+            nBasePositions.push({ x, y, z });
 
-            velocities.push({
-                x: (Math.random() - 0.5) * 0.002,
-                y: (Math.random() - 0.5) * 0.002,
-                z: (Math.random() - 0.5) * 0.002,
+            nColors[i * 3] = 0.3 + Math.random() * 0.2;
+            nColors[i * 3 + 1] = 0.4 + Math.random() * 0.2;
+            nColors[i * 3 + 2] = 0.8 + Math.random() * 0.2;
+
+            nSizes[i] = 0.02 + Math.random() * 0.03;
+
+            nVelocities.push({
+                x: (Math.random() - 0.5) * 0.001,
+                y: (Math.random() - 0.5) * 0.001,
+                z: (Math.random() - 0.5) * 0.001,
+                phase: Math.random() * Math.PI * 2,
+                freq: 0.5 + Math.random() * 1.5,
             });
         }
 
         const geo = new THREE.BufferGeometry();
-        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geo.setAttribute('position', new THREE.BufferAttribute(nPositions, 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(nColors, 3));
+        geo.setAttribute('size', new THREE.BufferAttribute(nSizes, 1));
 
         const mat = new THREE.PointsMaterial({
-            color: 0x6688cc,
-            size: 0.03,
+            size: 0.035,
+            vertexColors: true,
             transparent: true,
-            opacity: 0.5,
+            opacity: 0.7,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            sizeAttenuation: true,
+        });
+
+        neuralParticles = new THREE.Points(geo, mat);
+        brainGroup.add(neuralParticles);
+
+        // Connection lines between nearby particles
+        createNeuralLines();
+    }
+
+    function createNeuralLines() {
+        const linePositions = [];
+        const lineColors = [];
+        const maxDist = 0.6;
+        const maxConnections = 200;
+
+        let connections = 0;
+        for (let i = 0; i < NEURAL_COUNT && connections < maxConnections; i += 3) {
+            for (let j = i + 1; j < NEURAL_COUNT && connections < maxConnections; j += 3) {
+                const dx = nPositions[i * 3] - nPositions[j * 3];
+                const dy = nPositions[i * 3 + 1] - nPositions[j * 3 + 1];
+                const dz = nPositions[i * 3 + 2] - nPositions[j * 3 + 2];
+                const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                if (dist < maxDist && Math.random() > 0.5) {
+                    linePositions.push(
+                        nPositions[i * 3], nPositions[i * 3 + 1], nPositions[i * 3 + 2],
+                        nPositions[j * 3], nPositions[j * 3 + 1], nPositions[j * 3 + 2]
+                    );
+                    const alpha = 1 - dist / maxDist;
+                    lineColors.push(0.2 * alpha, 0.3 * alpha, 0.7 * alpha, 0.2 * alpha, 0.3 * alpha, 0.7 * alpha);
+                    connections++;
+                }
+            }
+        }
+
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(linePositions, 3));
+        geo.setAttribute('color', new THREE.Float32BufferAttribute(lineColors, 3));
+
+        const mat = new THREE.LineBasicMaterial({
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.12,
             blending: THREE.AdditiveBlending,
             depthWrite: false,
         });
 
-        particles = new THREE.Points(geo, mat);
-        scene.add(particles);
-        particlePositions = positions;
-        particleVelocities = velocities;
+        neuralLines = new THREE.LineSegments(geo, mat);
+        brainGroup.add(neuralLines);
+    }
+
+    // --- Lighting ---
+    function setupLighting() {
+        scene.add(new THREE.AmbientLight(0x1a1a3e, 0.6));
+
+        const dir = new THREE.DirectionalLight(0xaabbff, 0.4);
+        dir.position.set(3, 5, 4);
+        scene.add(dir);
+
+        const rim = new THREE.PointLight(0x6644cc, 0.5, 8);
+        rim.position.set(-3, 1, -3);
+        scene.add(rim);
+
+        const top = new THREE.PointLight(0x4488ff, 0.3, 6);
+        top.position.set(0, 3, 1);
+        scene.add(top);
+
+        // Region lights
+        for (const key of REGION_KEYS) {
+            const r = REGIONS[key];
+            const light = new THREE.PointLight(r.color, 0.2, 2.5);
+            light.position.set(r.position[0], r.position[1], r.position[2]);
+            brainGroup.add(light);
+        }
     }
 
     // --- Animation Loop ---
     function animate() {
         requestAnimationFrame(animate);
         const dt = clock.getDelta();
-        breathPhase += dt;
+        const elapsed = clock.elapsedTime;
+        breathPhase = elapsed;
 
-        // Breathing pulse
+        // Brain slow rotation
+        if (brainGroup) {
+            brainGroup.rotation.y = elapsed * 0.12;
+            brainGroup.rotation.x = Math.sin(elapsed * 0.08) * 0.05;
+        }
+
+        // Star field subtle rotation
+        if (starField) {
+            starField.rotation.y = elapsed * 0.005;
+            starField.rotation.x = elapsed * 0.002;
+        }
+
+        // Region breathing
         for (const key of REGION_KEYS) {
-            const mesh = brainMeshes[key];
-            const glow = brainGlows[key];
-            const baseScale = mesh.userData.baseScale;
-            const breath = 1 + Math.sin(breathPhase * 0.8 + REGIONS[key].position[0]) * 0.03;
-            const targetScale = baseScale * breath;
-
-            mesh.scale.lerp(new THREE.Vector3(targetScale, targetScale, targetScale), 0.1);
-            glow.scale.lerp(new THREE.Vector3(targetScale * 1.6, targetScale * 1.6, targetScale * 1.6), 0.1);
-
-            // Emissive intensity based on score
+            const mesh = regionMarkers[key];
+            const glow = regionGlows[key];
             const score = scores[key] || 0;
-            const targetEmissive = new THREE.Color(REGIONS[key].emissive).multiplyScalar(1 + score * 2);
-            mesh.material.emissive.lerp(targetEmissive, 0.05);
-            glow.material.opacity = 0.05 + score * 0.15;
+            const breath = 1 + Math.sin(breathPhase * 1.0 + REGIONS[key].position[0] * 2) * 0.04;
+            const targetScale = mesh.userData.baseScale * breath;
+
+            mesh.scale.lerp(new THREE.Vector3(targetScale, targetScale, targetScale), 0.08);
+            glow.scale.lerp(new THREE.Vector3(targetScale * 1.5, targetScale * 1.5, targetScale * 1.5), 0.08);
+
+            // Emissive intensity
+            mesh.material.emissiveIntensity = 0.5 + score * 1.5 + Math.sin(breathPhase * 2 + key.length) * 0.1;
+            glow.material.opacity = 0.04 + score * 0.12;
         }
 
-        // Connection pulse
-        for (const line of connectionLines) {
-            const pulse = 0.7 + Math.sin(breathPhase * 1.2 + line.userData.thickness * 5) * 0.3;
-            line.material.opacity = (0.1 + line.userData.thickness * 0.4) * pulse;
+        // Brain shell opacity pulse
+        if (brainHemisphereL) {
+            const op = brainHemisphereL.userData.baseOpacity + Math.sin(breathPhase * 0.5) * 0.02;
+            brainHemisphereL.material.opacity = op;
+            brainHemisphereR.material.opacity = op;
         }
 
-        // Particle drift
-        const pos = particlePositions;
-        for (let i = 0; i < PARTICLE_COUNT; i++) {
-            pos[i * 3] += particleVelocities[i].x;
-            pos[i * 3 + 1] += particleVelocities[i].y;
-            pos[i * 3 + 2] += particleVelocities[i].z;
-
-            // Bound
-            const dist = Math.sqrt(pos[i * 3] ** 2 + pos[i * 3 + 1] ** 2 + pos[i * 3 + 2] ** 2);
-            if (dist > 3.5) {
-                particleVelocities[i].x *= -1;
-                particleVelocities[i].y *= -1;
-                particleVelocities[i].z *= -1;
+        // Reject flash
+        if (rejectFlash > 0) {
+            rejectFlash -= dt * 3;
+            if (brainHemisphereL) {
+                brainHemisphereL.material.emissive.setHex(0x330000);
+                brainHemisphereL.material.emissiveIntensity = Math.max(0, rejectFlash);
+                brainHemisphereR.material.emissive.setHex(0x330000);
+                brainHemisphereR.material.emissiveIntensity = Math.max(0, rejectFlash);
+            }
+            // Flash all markers red
+            for (const key of REGION_KEYS) {
+                regionMarkers[key].material.emissive.setHex(0x440000);
+                regionMarkers[key].material.emissiveIntensity = Math.max(0.5, rejectFlash);
+            }
+        } else {
+            if (brainHemisphereL) {
+                brainHemisphereL.material.emissive.setHex(0x110822);
+                brainHemisphereL.material.emissiveIntensity = 0;
+                brainHemisphereR.material.emissive.setHex(0x110822);
+                brainHemisphereR.material.emissiveIntensity = 0;
+            }
+            // Reset marker emissive
+            for (const key of REGION_KEYS) {
+                regionMarkers[key].material.emissive.setHex(REGIONS[key].emissive);
             }
         }
-        particles.geometry.attributes.position.needsUpdate = true;
 
-        // Activation queue processing
+        // Neural particle animation
+        animateNeuralParticles(dt, elapsed);
+
+        // Camera orbit
+        camera.position.x = Math.sin(elapsed * 0.1) * 0.4;
+        camera.position.y = 0.8 + Math.sin(elapsed * 0.07) * 0.15;
+        camera.position.z = 4.2 + Math.cos(elapsed * 0.08) * 0.2;
+        camera.lookAt(0, 0.2, 0);
+
+        // Activation queue
         if (activationQueue.length > 0) {
             activationTimer -= dt;
             if (activationTimer <= 0) {
                 const next = activationQueue.shift();
                 activateRegion(next.key, next.score);
-                activationTimer = 0.3; // 300ms between activations
+                activationTimer = 0.3;
             }
         }
 
-        // Slow camera orbit
-        const time = clock.elapsedTime;
-        camera.position.x = Math.sin(time * 0.15) * 0.3;
-        camera.position.z = 4.5 + Math.cos(time * 0.1) * 0.2;
-        camera.lookAt(0, 0.3, 0.2);
+        // Write converge decay
+        if (writeConverge > 0) {
+            writeConverge -= dt * 0.8;
+        }
+
+        // Burst decay
+        if (burstActive > 0) {
+            burstActive -= dt * 2;
+        }
 
         renderer.render(scene, camera);
     }
 
-    // --- Region Activation Effects ---
-    function activateRegion(key, score) {
-        const mesh = brainMeshes[key];
-        const glow = brainGlows[key];
-        const targetScale = 1 + score * 0.8;
-        mesh.userData.baseScale = targetScale;
+    function animateNeuralParticles(dt, elapsed) {
+        const pos = nPositions;
+        const col = nColors;
+        const hippoPos = REGIONS.hippocampus.position;
 
-        // Flash glow
-        glow.material.opacity = 0.4;
+        for (let i = 0; i < NEURAL_COUNT; i++) {
+            const v = nVelocities[i];
+            const base = nBasePositions[i];
 
-        // High score: bigger + particle burst
-        if (score > 0.5) {
-            mesh.userData.baseScale = 1 + score * 1.2;
-            particleBurst(REGIONS[key].position, REGIONS[key].color);
+            // Floating drift
+            pos[i * 3] = base.x + Math.sin(elapsed * v.freq + v.phase) * 0.08;
+            pos[i * 3 + 1] = base.y + Math.cos(elapsed * v.freq * 0.7 + v.phase) * 0.06;
+            pos[i * 3 + 2] = base.z + Math.sin(elapsed * v.freq * 0.9 + v.phase * 1.3) * 0.07;
+
+            // Write converge: pull toward hippocampus
+            if (writeConverge > 0) {
+                const t = writeConverge * 0.5;
+                pos[i * 3] += (hippoPos[0] - pos[i * 3]) * t * dt;
+                pos[i * 3 + 1] += (hippoPos[1] - pos[i * 3 + 1]) * t * dt;
+                pos[i * 3 + 2] += (hippoPos[2] - pos[i * 3 + 2]) * t * dt;
+                // Golden color during convergence
+                col[i * 3] = 0.9 + Math.sin(elapsed * 5 + i) * 0.1;
+                col[i * 3 + 1] = 0.7 + Math.sin(elapsed * 5 + i) * 0.1;
+                col[i * 3 + 2] = 0.1;
+            }
+            // Burst: push outward
+            else if (burstActive > 0) {
+                const dist = Math.sqrt(pos[i * 3] ** 2 + pos[i * 3 + 1] ** 2 + pos[i * 3 + 2] ** 2);
+                const norm = Math.max(0.01, dist);
+                const push = burstActive * 0.5;
+                pos[i * 3] += (pos[i * 3] / norm) * push * dt;
+                pos[i * 3 + 1] += (pos[i * 3 + 1] / norm) * push * dt;
+                pos[i * 3 + 2] += (pos[i * 3 + 2] / norm) * push * dt;
+                // Bright cyan burst color
+                col[i * 3] = 0.5 + Math.random() * 0.5;
+                col[i * 3 + 1] = 0.8 + Math.random() * 0.2;
+                col[i * 3 + 2] = 1.0;
+            }
+            // Normal: subtle color variation
+            else {
+                const flicker = 0.3 + Math.sin(elapsed * v.freq * 2 + v.phase) * 0.15;
+                col[i * 3] = flicker * 0.6;
+                col[i * 3 + 1] = flicker * 0.8;
+                col[i * 3 + 2] = 0.6 + flicker * 0.4;
+            }
         }
 
-        // Gradually return to normal
-        setTimeout(() => {
-            mesh.userData.baseScale = 1;
-        }, 2000);
+        neuralParticles.geometry.attributes.position.needsUpdate = true;
+        neuralParticles.geometry.attributes.color.needsUpdate = true;
+
+        // Pulse neural line opacity
+        neuralLines.material.opacity = 0.08 + Math.sin(elapsed * 1.5) * 0.04 + burstActive * 0.15;
     }
 
-    function particleBurst(position, color) {
-        // Temporarily change some particles to burst from position
-        const pos = particlePositions;
-        const count = 20;
-        for (let i = 0; i < count; i++) {
-            const idx = Math.floor(Math.random() * PARTICLE_COUNT);
-            pos[idx * 3] = position[0] + (Math.random() - 0.5) * 0.2;
-            pos[idx * 3 + 1] = position[1] + (Math.random() - 0.5) * 0.2;
-            pos[idx * 3 + 2] = position[2] + (Math.random() - 0.5) * 0.2;
-            const speed = 0.01 + Math.random() * 0.02;
-            particleVelocities[idx].x = (Math.random() - 0.5) * speed * 3;
-            particleVelocities[idx].y = (Math.random() - 0.5) * speed * 3;
-            particleVelocities[idx].z = (Math.random() - 0.5) * speed * 3;
+    // --- Region Activation ---
+    function activateRegion(key, score) {
+        const mesh = regionMarkers[key];
+        const glow = regionGlows[key];
+
+        mesh.userData.baseScale = 1 + score * 0.6;
+        glow.material.opacity = 0.25 + score * 0.3;
+
+        // High score burst
+        if (score > 0.5) {
+            mesh.userData.baseScale = 1 + score * 1.0;
+            burstActive = 1.0;
         }
-        particles.geometry.attributes.position.needsUpdate = true;
+
+        setTimeout(() => {
+            mesh.userData.baseScale = 1;
+        }, 2500);
     }
 
     function showRejected() {
-        // Flash all regions red
-        for (const key of REGION_KEYS) {
-            const mesh = brainMeshes[key];
-            mesh.userData.baseScale = 0.8;
-            mesh.material.emissive.set(0x440000);
-            setTimeout(() => {
-                mesh.userData.baseScale = 1;
-                mesh.material.emissive.set(REGIONS[key].emissive);
-            }, 500);
-        }
+        rejectFlash = 1.0;
     }
 
     function showWriting() {
-        // Particles converge to center
-        const pos = particlePositions;
-        for (let i = 0; i < PARTICLE_COUNT; i++) {
-            pos[i * 3] *= 0.95;
-            pos[i * 3 + 1] *= 0.95;
-            pos[i * 3 + 2] *= 0.95;
-        }
-        particles.geometry.attributes.position.needsUpdate = true;
+        writeConverge = 1.5;
     }
 
-    // --- Gate Evaluation Sequence ---
     function triggerGateAnimation(components, shouldRemember) {
         activationQueue = [];
         activationTimer = 0;
@@ -360,7 +597,7 @@
         }
     }
 
-    // --- API Calls ---
+    // --- API Calls (unchanged) ---
     async function fetchStats() {
         try {
             const res = await fetch('/api/stats');
@@ -372,9 +609,7 @@
                 document.getElementById('stat-l3').textContent = by.L3 || 0;
                 document.getElementById('stat-total').textContent = data.total_engrams || 0;
             }
-        } catch (e) {
-            console.error('fetchStats error:', e);
-        }
+        } catch (e) { console.error('fetchStats error:', e); }
     }
 
     async function fetchBrainStatus() {
@@ -384,10 +619,7 @@
             if (data.components) {
                 for (const key of REGION_KEYS) {
                     const comp = data.components[key];
-                    if (comp) {
-                        const score = comp.score || 0;
-                        updateGauge(key, score);
-                    }
+                    if (comp) updateGauge(key, comp.score || 0);
                 }
                 if (data.decision_score !== undefined) {
                     document.getElementById('decision-score').textContent = data.decision_score.toFixed(3);
@@ -401,9 +633,7 @@
                     }
                 }
             }
-        } catch (e) {
-            console.error('fetchBrainStatus error:', e);
-        }
+        } catch (e) { console.error('fetchBrainStatus error:', e); }
     }
 
     function updateGauge(key, score) {
@@ -434,7 +664,6 @@
                 }
             }
 
-            // Update decision display
             const ds = data.decision_score || 0;
             document.getElementById('decision-score').textContent = ds.toFixed(3);
             const badge = document.getElementById('decision-badge');
@@ -446,23 +675,17 @@
                 badge.className = 'text-xs px-2 py-0.5 rounded-full badge-reject';
             }
 
-            // Trigger 3D animation
             const components = {};
             for (const key of REGION_KEYS) {
                 components[key] = data.components?.[key]?.score || 0;
             }
             triggerGateAnimation(components, data.should_remember);
-
-            // Show overlay
             showGateResult(data);
 
-            // Refresh stats after write
             if (execute && data.should_remember) {
                 setTimeout(() => { fetchStats(); loadEngrams('L1'); }, 500);
             }
-        } catch (e) {
-            console.error('gate error:', e);
-        }
+        } catch (e) { console.error('gate error:', e); }
     }
 
     function showGateResult(data) {
@@ -524,9 +747,7 @@
             if (results.length === 0) {
                 container.innerHTML = '<div class="text-gray-500">未找到相关记忆</div>';
             }
-        } catch (e) {
-            console.error('search error:', e);
-        }
+        } catch (e) { console.error('search error:', e); }
     }
 
     async function loadEngrams(layer) {
@@ -555,40 +776,26 @@
             if (engrams.length === 0) {
                 container.innerHTML = '<div class="text-gray-600 text-sm">' + layer + ' 层暂无记忆</div>';
             }
-        } catch (e) {
-            console.error('loadEngrams error:', e);
-        }
+        } catch (e) { console.error('loadEngrams error:', e); }
     }
 
     // --- WebSocket ---
-    let ws;
-    let wsReconnectTimer;
+    let ws, wsReconnectTimer;
 
     function connectWS() {
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         ws = new WebSocket(`${protocol}//${location.host}/api/events`);
 
-        ws.onopen = () => {
-            updateWsStatus(true);
-        };
-
+        ws.onopen = () => updateWsStatus(true);
         ws.onmessage = (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                handleWsMessage(data);
-            } catch (e) {
-                console.error('ws parse error:', e);
-            }
+            try { handleWsMessage(JSON.parse(event.data)); }
+            catch (e) { console.error('ws parse error:', e); }
         };
-
         ws.onclose = () => {
             updateWsStatus(false);
             wsReconnectTimer = setTimeout(connectWS, 3000);
         };
-
-        ws.onerror = () => {
-            ws.close();
-        };
+        ws.onerror = () => ws.close();
     }
 
     function updateWsStatus(connected) {
@@ -610,7 +817,6 @@
                     document.getElementById('stat-total').textContent = data.total || 0;
                 }
                 break;
-
             case 'gate':
             case 'gate_execute':
                 if (data.components) {
@@ -618,7 +824,6 @@
                         updateGauge(key, data.components[key] || 0);
                     }
                     triggerGateAnimation(data.components, data.should_remember);
-
                     document.getElementById('decision-score').textContent = (data.decision_score || 0).toFixed(3);
                     const badge = document.getElementById('decision-badge');
                     if (data.should_remember) {
@@ -630,31 +835,26 @@
                     }
                 }
                 if (data.type === 'gate_execute') {
-                    setTimeout(() => { fetchStats(); }, 500);
+                    setTimeout(() => fetchStats(), 500);
                 }
                 break;
-
             case 'lagged':
-                console.warn('WS lagged, missed', data.missed, 'events');
                 fetchStats();
                 fetchBrainStatus();
                 break;
         }
     }
 
-    // --- Utility ---
     function escapeHtml(str) {
         const div = document.createElement('div');
         div.textContent = str;
         return div.innerHTML;
     }
 
-    // --- Expose to window ---
     window.doGate = doGate;
     window.doSearch = doSearch;
     window.loadEngrams = loadEngrams;
 
-    // --- Init on load ---
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
     } else {
