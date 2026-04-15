@@ -10,10 +10,10 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
     'use strict';
 
     const REGIONS = {
-        amygdala: { color: new THREE.Color(0xff4444), pos: [0, -0.4, 0.4], label: '杏仁核' },
-        hippocampus: { color: new THREE.Color(0xffd700), pos: [0, 0, 0.8], label: '海马体' },
-        prefrontal: { color: new THREE.Color(0x4488ff), pos: [0, 0.6, 1.2], label: '前额叶' },
-        temporal: { color: new THREE.Color(0x44ff88), pos: [-1.2, -0.1, 0.2], label: '颞叶' },
+        amygdala: { color: new THREE.Color(0xff4444), pos: [0, -0.4, 0.2], label: '杏仁核' },
+        hippocampus: { color: new THREE.Color(0xffd700), pos: [0, 0, 0.6], label: '海马体' },
+        prefrontal: { color: new THREE.Color(0x4488ff), pos: [0, 0.6, 1.0], label: '前额叶' },
+        temporal: { color: new THREE.Color(0x44ff88), pos: [-1.2, -0.1, 0.0], label: '颞叶' },
     };
     const REGION_KEYS = Object.keys(REGIONS);
     const PARTICLE_COUNT = 15000;
@@ -143,10 +143,21 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
         setupLights();
 
         window.addEventListener('resize', onWindowResize);
-        animate();
+
+        // Mouse tracking for card glow effect
+        document.addEventListener('mousemove', (e) => {
+            document.querySelectorAll('.memory-card').forEach(card => {
+                const rect = card.getBoundingClientRect();
+                const x = ((e.clientX - rect.left) / rect.width) * 100;
+                const y = ((e.clientY - rect.top) / rect.height) * 100;
+                card.style.setProperty('--mouse-x', x + '%');
+                card.style.setProperty('--mouse-y', y + '%');
+            });
+        });
         
         fetchStats(); fetchBrainStatus(); loadEngrams('L1'); connectWS();
         console.log('Hippocampus 3D Engine Ready.');
+        animate();
     }
 
     function createNeuralSystem() {
@@ -167,7 +178,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
             let y = (Math.random() - 0.5) * 2.4;
             let z = (Math.random() - 0.5) * 3.4;
 
-            const dx = x / 1.35; const dy = y / 1.15; const dz = (z - 0.2) / 1.55;
+            const dx = x / 1.35; const dy = y / 1.15; const dz = z / 1.55;
             if (dx * dx + dy * dy + dz * dz < 1.0) {
                 positions.push(x, y, z);
                 randoms.push(Math.random());
@@ -350,6 +361,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
     function showGateResult(data) {
         const overlay = document.getElementById('gate-overlay');
         const body = document.getElementById('gate-result-body');
+        const statusBadge = document.getElementById('gate-ready-text');
         
         // Clear all existing timers to prevent collision
         if (typewriterTimeout) clearTimeout(typewriterTimeout);
@@ -362,14 +374,19 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
         overlay.classList.remove('hidden', 'hiding'); 
         overlay.classList.add('visible');
         
+        if (statusBadge) {
+            statusBadge.textContent = 'PROCESSING...';
+            statusBadge.className = 'text-g5 uppercase font-mono bg-cyan-500/10 px-2 py-0.5 border border-cyan-500/30 text-cyan-400 animate-pulse';
+        }
+
         // Reset content immediately
         if (body) body.innerHTML = '';
 
-        const textToType = `>> 认知处理完成.\n>> 置信度: ${(data.decision_score||0).toFixed(4)}\n>> 重要性: ${data.importance||0}\n\n[系统反馈]: ${data.reason || '无特殊标记'}`;
+        const textToType = `>> 认知映射分析中...\n>> 置信分值: ${(data.decision_score||0).toFixed(4)}\n>> 重要程度: ${data.importance||0}\n>> 情感倾向: ${data.emotion || 'neutral'}\n\n[判断结果]: ${data.reason || '无特殊标记'}`;
         
-        const charSpeed = 30; 
+        const charSpeed = 20; 
         const totalTypeTime = textToType.length * charSpeed;
-        const readTime = 3500;
+        const readTime = 4000;
 
         setTimeout(() => {
             typeWriterEffect('gate-result-body', textToType, charSpeed);
@@ -377,12 +394,20 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
         // Track closure timer
         overlayCloseTimeout = setTimeout(() => {
-            overlay.classList.add('hiding');
-            setTimeout(() => { 
-                overlay.classList.remove('visible', 'hiding'); 
-                overlay.classList.add('hidden'); 
-            }, 600);
-        }, totalTypeTime + readTime + 500);
+            if (statusBadge) {
+                statusBadge.textContent = 'ANALYSIS COMPLETE';
+                statusBadge.classList.remove('animate-pulse');
+                statusBadge.className = 'text-g5 uppercase font-mono bg-green-500/10 px-2 py-0.5 border border-green-500/30 text-green-400';
+            }
+            
+            setTimeout(() => {
+                overlay.classList.add('hiding');
+                setTimeout(() => { 
+                    overlay.classList.remove('visible', 'hiding'); 
+                    overlay.classList.add('hidden'); 
+                }, 600);
+            }, readTime);
+        }, totalTypeTime + 500);
     }
 
     async function fetchStats() {
@@ -439,13 +464,105 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
             const res = await fetch(`/api/engrams?layer=${layer}&limit=15`);
             const data = await res.json();
             const container = document.getElementById('engram-feed'); container.innerHTML = '';
+            
             (data.engrams || []).forEach((e, i) => {
-                const div = document.createElement('div'); div.className = 'memory-card'; div.style.animationDelay = `${i * 0.05}s`;
-                div.innerHTML = `<div class="flex justify-between text-g5 font-mono mb-2 uppercase tracking-tighter"><span>${e.created_at.split('T')[0]}</span><span class="text-cyan-500/60">IMPORTANCE: ${e.importance}</span></div><div class="text-g2 text-gray-200">${escapeHtml(e.content)}</div>`;
+                const div = document.createElement('div');
+                div.className = 'memory-card group';
+                div.style.animationDelay = `${i * 0.05}s`;
+                div.setAttribute('data-emotion', e.emotion || 'neutral');
+
+                const dateStr = e.created_at.split('T')[0];
+                const timeStr = e.created_at.split('T')[1]?.split('.')[0] || '';
+
+                const tagsHtml = (e.tags || [])
+                    .map(t => `<span class="engram-tag">${escapeHtml(t)}</span>`)
+                    .join('');
+
+                div.innerHTML = `
+                    <div class="emotion-bar"></div>
+                    <div class="engram-inner">
+                        <div class="engram-header">
+                            <div class="engram-meta">
+                                <span class="engram-layer-badge">${e.layer || 'L1'}</span>
+                                <span class="engram-time">${dateStr} ${timeStr}</span>
+                            </div>
+                            <div class="importance-ring" title="重要性: ${e.importance}" style="--importance: ${e.importance * 10}">
+                                <svg viewBox="0 0 36 36">
+                                    <circle class="importance-ring-bg" cx="18" cy="18" r="14"/>
+                                    <circle class="importance-ring-fill" cx="18" cy="18" r="14"/>
+                                </svg>
+                                <span class="importance-ring-value">${Math.round(e.importance * 10)}</span>
+                            </div>
+                        </div>
+                        <div class="engram-content">${escapeHtml(e.content)}</div>
+                        <div class="engram-footer">
+                            <div class="tag-list">${tagsHtml}</div>
+                            <button onclick="openDeleteModal('${e.id}')" class="engram-delete-btn" title="永久删除此印迹">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                            </button>
+                        </div>
+                    </div>
+                `;
                 container.appendChild(div);
             });
 
-        } catch (e) {}
+        } catch (e) {
+            console.error('Failed to load engrams:', e);
+        }
+    }
+
+    let deleteTargetId = null;
+
+    async function deleteEngram(id) {
+        try {
+            const res = await fetch(`/api/engrams/${id}`, { method: 'DELETE' });
+            const data = await res.json();
+            if (data.status === 'ok') {
+                playSound('click');
+                fetchStats();
+                const activeTab = document.querySelector('#layer-tabs button.active');
+                if (activeTab) loadEngrams(activeTab.textContent);
+            }
+        } catch (e) {
+            console.error('Delete failed:', e);
+        }
+    }
+
+    function openDeleteModal(id) {
+        deleteTargetId = id;
+        const container = document.getElementById('modal-container');
+        const modal = document.getElementById('delete-modal');
+        
+        container.classList.remove('hidden');
+        // Force reflow
+        container.offsetHeight;
+        
+        container.classList.add('opacity-100');
+        modal.classList.add('scale-100');
+        modal.classList.remove('scale-95');
+        
+        const confirmBtn = document.getElementById('modal-confirm-btn');
+        confirmBtn.onclick = async () => {
+            if (deleteTargetId) {
+                await deleteEngram(deleteTargetId);
+                closeDeleteModal();
+            }
+        };
+        playSound('hover');
+    }
+
+    function closeDeleteModal() {
+        const container = document.getElementById('modal-container');
+        const modal = document.getElementById('delete-modal');
+        
+        container.classList.remove('opacity-100');
+        modal.classList.remove('scale-100');
+        modal.classList.add('scale-95');
+        
+        setTimeout(() => {
+            container.classList.add('hidden');
+            deleteTargetId = null;
+        }, 300);
     }
 
     function connectWS() {
@@ -468,6 +585,13 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
                         if (activeTab && activeTab.textContent === 'L1') loadEngrams('L1');
                     }, 800);
                 }
+            } else if (data.type === 'delete_engram') {
+                console.log('Engram deleted neural event:', data.id);
+                // 视觉反馈：红色闪烁
+                triggerNeuralEvent('amygdala', 0.9);
+                fetchStats();
+                const activeTab = document.querySelector('#layer-tabs button.active');
+                if (activeTab) loadEngrams(activeTab.textContent);
             } else if (data.type === 'hook_event') {
                 // 兼容旧的 hook_event (如果有的话)
                 console.log('Neural Hook received:', data.hook_type);
@@ -550,6 +674,9 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
     }
 
     window.doGate = doGate; window.doSearch = doSearch; window.loadEngrams = loadEngrams;
+    window.deleteEngram = deleteEngram;
+    window.openDeleteModal = openDeleteModal;
+    window.closeDeleteModal = closeDeleteModal;
     window.toggleFocusMode = toggleFocusMode; window.toggleAudio = toggleAudio;
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();

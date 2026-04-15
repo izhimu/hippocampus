@@ -20,12 +20,21 @@
 <body class="bg-gray-950 text-gray-100 overflow-x-hidden md:overflow-hidden selection:bg-cyan-500/30">
     <!-- 背景 3D 渲染 -->
     <div id="canvas-container" class="fixed inset-0 -z-10"></div>
-    
+
+    <!-- SVG Defs for gradients (hidden, used by CSS) -->
+    <svg style="position:absolute;width:0;height:0;overflow:hidden" aria-hidden="true">
+        <defs>
+            <linearGradient id="importanceGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stop-color="#00f3ff"/>
+                <stop offset="100%" stop-color="#3b82f6"/>
+            </linearGradient>
+        </defs>
+    </svg>
+
     <!-- 左侧面板：状态与监控 -->
     <div id="panel-left" class="relative md:fixed top-0 md:top-6 left-0 md:left-6 z-10 w-full md:w-80 p-4 md:p-0 space-y-4 pointer-events-none">
         <div class="hud-panel pointer-events-auto mt-12 md:mt-0">
-            <div class="flex items-center justify-between mb-4">
-                <h1 class="text-lg font-bold bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent font-mono tracking-wider">HIPPOCAMPUS</h1>
+            <div class="flex items-center justify-end mb-4">
                 <div id="ws-status" class="text-g5 uppercase tracking-widest flex items-center gap-1.5">
                     <span class="w-1.5 h-1.5 rounded-full bg-gray-600"></span> 离线
                 </div>
@@ -126,7 +135,7 @@
                     <button onclick="loadEngrams('L3')" class="control-btn px-2 py-0.5">L3</button>
                 </div>
             </div>
-            <div id="engram-feed" class="flex-1 overflow-y-auto custom-scrollbar pb-2"></div>
+            <div id="engram-feed" class="flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar pb-2"></div>
         </div>
     </div>
 
@@ -134,15 +143,16 @@
     <div id="panel-bottom" class="fixed bottom-2 md:bottom-8 left-1/2 -translate-x-1/2 z-20 w-[95%] md:w-[600px] pointer-events-none">
         <!-- 评估结果 -->
         <div id="gate-overlay" class="hidden w-full mb-4">
-            <div id="gate-result-card" class="hud-panel p-5 w-full border-l-4 border-l-cyan-500">
-                <div class="flex items-center gap-3 mb-3 border-b border-gray-800 pb-3">
+            <div id="gate-result-card" class="gate-card w-full">
+                <div class="gate-card-scanline"></div>
+                <div class="flex items-center gap-3 mb-3 border-b border-cyan-500/20 pb-3">
                     <div id="gate-result-icon" class="w-6 h-6 text-cyan-400">
                         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
                     </div>
-                    <h3 class="text-g3 flex-1" id="gate-result-title">门控评估</h3>
-                    <div class="text-g5 uppercase font-mono" id="gate-ready-text">READY</div>
+                    <h3 class="text-g3 flex-1 !text-cyan-400" id="gate-result-title">门控评估</h3>
+                    <div class="text-g5 uppercase font-mono bg-cyan-500/10 px-2 py-0.5 border border-cyan-500/30 text-cyan-400" id="gate-ready-text">PROCESSING</div>
                 </div>
-                <div id="gate-result-body" class="text-g2 font-mono text-cyan-100/90 whitespace-pre-line min-h-[40px]"></div>
+                <div id="gate-result-body" class="text-g2 font-mono text-cyan-100/90 whitespace-pre-line min-h-[40px] leading-relaxed"></div>
             </div>
         </div>
 
@@ -163,6 +173,22 @@
     <div class="fixed top-4 right-4 md:top-auto md:bottom-8 md:right-6 z-20 flex gap-2 md:gap-3">
         <button id="btn-focus" class="control-btn" onclick="toggleFocusMode()">专注</button>
         <button id="btn-audio" class="control-btn" onclick="toggleAudio()">静音</button>
+    </div>
+
+    <div id="modal-container" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm hidden opacity-0 transition-all duration-300">
+        <div class="hud-panel w-80 p-6 border-l-4 border-l-red-500 transform scale-95 transition-all duration-300" id="delete-modal">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="text-red-500">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                </div>
+                <h3 class="text-g3 text-gray-100 uppercase tracking-widest">确认删除印迹</h3>
+            </div>
+            <p class="text-g2 text-gray-400 mb-6 font-mono text-xs leading-relaxed uppercase">此操作将从海马体长期存储库中永久移除该神经印迹，无法撤销。确认继续？</p>
+            <div class="flex gap-2">
+                <button onclick="closeDeleteModal()" class="flex-1 control-btn !bg-gray-800/30">CANCEL</button>
+                <button id="modal-confirm-btn" class="flex-1 control-btn !border-red-500/30 !text-red-400 hover:!bg-red-500/10 hover:!border-red-500/60">CONFIRM</button>
+            </div>
+        </div>
     </div>
 
     <audio id="sound-hover" src="https://assets.mixkit.co/active_storage/sfx/2571/2571-preview.mp3" preload="auto"></audio>

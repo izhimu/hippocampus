@@ -65,36 +65,300 @@ body {
 
 /* --- Components --- */
 
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    padding: 10px;
-    border-radius: 2px;
-    text-align: center;
-}
-
+/* --- 神经印迹卡片重新设计 (Modern HUD Minimalist) --- */
 .memory-card {
     background: rgba(255, 255, 255, 0.02);
-    border-left: 2px solid rgba(255, 255, 255, 0.1);
-    padding: 14px;
-    margin-bottom: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 0;
+    margin-bottom: 6px;
+    border-radius: 2px;
+    position: relative;
     transition: all 0.3s ease;
     opacity: 0;
-    transform: translateY(10px);
-    animation: slideUpFade 0.4s ease forwards;
+    transform: translateY(8px);
+    animation: engramEntry 0.4s ease-out forwards;
+}
+
+@keyframes engramEntry {
+    to { opacity: 1; transform: translateY(0); }
 }
 
 .memory-card:hover {
-    background: rgba(255, 255, 255, 0.05);
-    border-left-color: var(--cyan);
-    transform: translateX(4px);
+    background: rgba(255, 255, 255, 0.03);
+    border-color: rgba(0, 243, 255, 0.15);
+}
+
+/* 移除之前的护角和发光背景 */
+.memory-card::before, .memory-card::after { display: none; }
+
+/* 情绪指示器：统一使用左侧细边框，简约风格与神经活动面板一致 */
+.emotion-bar {
+    display: none; /* 移除重复的 emotion-bar 元素，使用 border-left 统一风格 */
+}
+
+/* 内部布局优化：模仿神经活动列表 */
+.engram-inner {
+    padding: 10px 12px;
+}
+
+.engram-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.engram-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.engram-layer-badge {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 9px;
+    color: rgba(255, 255, 255, 0.4);
+    letter-spacing: 1px;
+}
+
+.memory-card:hover .engram-layer-badge {
+    color: var(--cyan);
+}
+
+.engram-time {
+    font-size: 9px;
+    color: #4b5563;
+    font-family: 'Share Tech Mono', monospace;
+}
+
+/* 重要性环形指示器：更小巧 */
+.importance-ring {
+    width: 22px;
+    height: 22px;
+    pointer-events: none;
+}
+
+.importance-ring svg {
+    transform: rotate(-90deg);
+}
+
+.importance-ring-bg {
+    fill: none;
+    stroke: rgba(255, 255, 255, 0.06);
+    stroke-width: 3;
+}
+
+.importance-ring-fill {
+    fill: none;
+    stroke: url(#importanceGradient);
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-dasharray: 76;
+    stroke-dashoffset: calc(76 - (76 * var(--importance, 0) * 0.01));
+    transition: stroke-dashoffset 0.6s ease;
+    filter: drop-shadow(0 0 4px rgba(0, 243, 255, 0.4));
+}
+
+.memory-card:hover .importance-ring-fill {
+    filter: drop-shadow(0 0 8px rgba(0, 243, 255, 0.7));
+}
+
+.importance-ring-value {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 8px;
+    font-family: 'Share Tech Mono', monospace;
+    color: rgba(255, 255, 255, 0.3);
+}
+
+/* 内容区域：纯净排版 */
+.engram-content {
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    color: rgba(255, 255, 255, 0.7);
+    margin-bottom: 8px;
+    font-family: 'Inter', sans-serif;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.memory-card:hover .engram-content {
+    color: rgba(255, 255, 255, 0.95);
+}
+
+/* 底部操作区：收敛 */
+.engram-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 6px;
+    border-top: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.tag-list {
+    display: flex;
+    gap: 4px;
+}
+
+.engram-tag {
+    font-size: 8px;
+    font-family: 'Share Tech Mono', monospace;
+    color: rgba(255, 255, 255, 0.4);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    transition: color 0.25s ease;
+}
+
+.memory-card:hover .engram-tag {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+/* 门控评估卡片同步重构 - 简约风格 */
+.gate-card {
+    background: rgba(0, 243, 255, 0.03) !important;
+    border: 1px solid rgba(0, 243, 255, 0.15) !important;
+    border-radius: 2px !important;
+    padding: 16px !important;
+}
+
+.gate-card-scanline {
+    display: none;
+}
+
+/* 情绪颜色提示 - 简约风格，与神经活动进度条统一 */
+.memory-card { border-left: 2px solid rgba(255,255,255,0.08); }
+.memory-card[data-emotion="joy"] { border-left-color: var(--amber); }
+.memory-card[data-emotion="anger"] { border-left-color: var(--red); }
+.memory-card[data-emotion="sadness"] { border-left-color: var(--blue); }
+.memory-card[data-emotion="fear"] { border-left-color: var(--purple); }
+.memory-card[data-emotion="surprise"] { border-left-color: var(--green); }
+.memory-card[data-emotion="neutral"], .memory-card:not([data-emotion]) { border-left-color: rgba(255,255,255,0.12); }
+
+/* 卡片主体：内容优化 */
+.engram-content {
+    font-size: 0.8125rem;
+    line-height: 1.6;
+    margin-bottom: 12px;
+    color: rgba(184, 188, 196, 0.85);
+    transition: color 0.3s ease;
+    font-family: 'Inter', sans-serif;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.memory-card:hover .engram-content {
+    color: #fff;
+}
+
+/* 删除按钮 - 统一版 */
+.engram-delete-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: all 0.3s ease;
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.3);
+    cursor: pointer;
+    flex-shrink: 0;
+    margin-left: 8px;
+    position: relative;
+    z-index: 10;
+}
+
+.memory-card:hover .engram-delete-btn {
+    opacity: 1;
+    color: rgba(255, 255, 255, 0.5);
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.15);
+}
+
+.engram-delete-btn:hover {
+    background: rgba(239, 68, 68, 0.2) !important;
+    color: #ff4d4d !important;
+    border-color: rgba(239, 68, 68, 0.5) !important;
+    transform: scale(1.05);
+    box-shadow: 0 0 15px rgba(239, 68, 68, 0.2);
+}
+
+/* 之前的其他样式 ... */
+
+/* 删除确认气泡 */
+.delete-confirm-bubble {
+    position: absolute;
+    top: 0;
+    right: 0;
+    height: 100%;
+    width: 6rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    background: linear-gradient(to left, rgba(127, 29, 29, 0.9), transparent);
+    backdrop-filter: blur(4px);
+    z-index: 10;
+    pointer-events: auto;
+    border-radius: 0 4px 4px 0;
+}
+
+.delete-confirm-btn {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 9999px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition-property: all;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 200ms;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    cursor: pointer;
+}
+
+.delete-confirm-btn.confirm {
+    background: rgba(220, 38, 38, 0.8);
+    color: white;
+    box-shadow: 0 0 10px rgba(220,38,38,0.3);
+}
+
+.delete-confirm-btn.confirm:hover {
+    background: rgba(220, 38, 38, 1);
+    transform: scale(1.1);
+}
+
+.delete-confirm-btn.cancel {
+    background: rgba(31, 41, 55, 0.8);
+    color: #d1d5db;
+}
+
+.delete-confirm-btn.cancel:hover {
+    background: rgba(55, 65, 81, 1);
+    transform: scale(1.1);
+}
+
+.memory-card.deleting {
+    filter: blur(2px) grayscale(0.5);
+    opacity: 0.5;
+    pointer-events: none;
 }
 
 .search-result {
     background: rgba(0, 243, 255, 0.03);
-    border: 1px solid rgba(0, 243, 255, 0.1);
-    padding: 12px;
+    border: 1px solid rgba(0, 243, 255, 0.08);
+    padding: 10px 12px;
     border-radius: 2px;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
     opacity: 0;
     transform: translateX(10px);
     animation: slideLeftFade 0.4s ease forwards;

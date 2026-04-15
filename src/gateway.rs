@@ -65,6 +65,7 @@ pub async fn run_gateway(port: u16) -> Result<(), Box<dyn std::error::Error + Se
         .route("/api/stats", get(api_stats))
         .route("/api/brain/status", get(api_brain_status))
         .route("/api/engrams", get(api_engrams))
+        .route("/api/engrams/{id}", axum::routing::delete(api_delete_engram))
         .route("/api/recall", post(api_recall))
         .route("/api/gate", post(api_gate))
         .route("/api/gate/execute", post(api_gate_execute))
@@ -182,6 +183,38 @@ async fn api_engrams(
             "count": list.len(),
             "engrams": list,
         }))
+    })
+    .await;
+    unwrap_res(res)
+}
+
+async fn api_delete_engram(
+    axum::extract::Path(id): axum::extract::Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Json<Value> {
+    let home = state.home.clone();
+    let tx = state.tx.clone();
+
+    let res = tokio::task::spawn_blocking(move || -> Result<Value, String> {
+        let hippo = crate::Hippocampus::new(&home).map_err(|e| e.to_string())?;
+        let deleted = hippo.store.delete(&id).map_err(|e| e.to_string())?;
+
+        if deleted {
+            // 广播删除事件
+            let event = json!({
+                "type": "delete_engram",
+                "id": id,
+                "timestamp": now_ts(),
+            });
+            let _ = tx.send(event.to_string());
+
+            Ok(json!({
+                "status": "ok",
+                "message": format!("Engram {} deleted", id),
+            }))
+        } else {
+            Err(format!("Engram {} not found", id))
+        }
     })
     .await;
     unwrap_res(res)
