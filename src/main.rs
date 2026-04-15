@@ -1,5 +1,7 @@
 /// hippocampus CLI — 手动解析 args，无外部依赖
 
+use std::io::Read;
+
 fn get_home() -> String {
     std::env::var("HIPPOCAMPUS_HOME").unwrap_or_else(|_| {
         std::env::var("HOME").map(|h| format!("{}/.hippocampus", h)).unwrap_or_else(|_| "./.hippocampus".to_string())
@@ -57,28 +59,31 @@ fn print_usage() {
     eprintln!("  hippocampus learned [--top N] [--reset]");
     eprintln!("  hippocampus import --source PATH [--dry-run] [--clean-tests] [--min-importance N]");
   eprintln!("  hippocampus vacuum");
-    eprintln!("  hippocampus gateway [--port 8088]");
-    eprintln!();
-    eprintln!("Env: HIPPOCAMPUS_HOME (default: ~/.hippocampus)");
-}
+  eprintln!("  hippocampus gateway [--port 8088]");
+  eprintln!("  hippocampus hook <event>");
+  eprintln!();
+  eprintln!("Env: HIPPOCAMPUS_HOME (default: ~/.hippocampus)");
+  }
 
-fn run_cmd(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    match cmd {
-        "init" => cmd_init(),
-        "remember" => cmd_remember(args),
-        "recall" => cmd_recall(args),
-        "reflect" => cmd_reflect(args),
-        "reconsolidate" => cmd_reconsolidate(args),
-        "dedup" => cmd_dedup(args),
-        "learn-synonyms" => cmd_learn_synonyms(args),
-        "gate" => cmd_gate(args),
-        "stats" => cmd_stats(),
-        "install" => cmd_install(args),
-        "import" => cmd_import(args),
-        "vacuum" => cmd_vacuum(),
-        "learned" => cmd_learned(args),
-        "gateway" => cmd_gateway(args),
-        _ => {
+  fn run_cmd(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+  match cmd {
+      "init" => cmd_init(),
+      "remember" => cmd_remember(args),
+      "recall" => cmd_recall(args),
+      "reflect" => cmd_reflect(args),
+      "reconsolidate" => cmd_reconsolidate(args),
+      "dedup" => cmd_dedup(args),
+      "learn-synonyms" => cmd_learn_synonyms(args),
+      "gate" => cmd_gate(args),
+      "stats" => cmd_stats(),
+      "install" => cmd_install(args),
+      "import" => cmd_import(args),
+      "vacuum" => cmd_vacuum(),
+      "learned" => cmd_learned(args),
+      "gateway" => cmd_gateway(args),
+      "hook" => cmd_hook(args),
+      _ => {
+
             eprintln!("Unknown command: {}", cmd);
             print_usage();
             Err("unknown command".into())
@@ -727,5 +732,116 @@ fn cmd_gateway(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
     rt.block_on(hippocampus::gateway::run_gateway(port))
         .map_err(|e| -> Box<dyn std::error::Error> { e })?;
+    Ok(())
+}
+
+fn cmd_hook(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let mut buffer = String::new();
+    let _ = std::io::stdin().read_to_string(&mut buffer);
+    let input: serde_json::Value = serde_json::from_str(&buffer).unwrap_or_default();
+    
+    // 1. 确定通用 Hook 类型 (从命令行第一个参数获取)
+    let hook_type = args.get(0).map(|s| s.as_str()).unwrap_or("unknown");
+    
+    // 2. 识别适配器类型
+    let is_claude = args.contains(&"--claude".to_string());
+    
+    // 3. 提取通用字段 (根据适配器映射)
+    let (event_prompt, event_action, event_summary, session_id) = if is_claude {
+        let prompt = input.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+        let last_msg = input.get("lastUserMessage").and_then(|v| v.as_str()).unwrap_or("");
+        let sid = input.get("session_id").and_then(|v| v.as_str());
+        
+        let action_msg = if let Some(tool) = input.get("toolName").and_then(|v| v.as_str()) {
+            let t_in = input.get("toolInput").map(|v| v.to_string()).unwrap_or_default();
+            let t_out = input.get("toolOutput").map(|v| v.to_string()).unwrap_or_default();
+            Some(format!("工具: {}\n输入: {}\n输出: {}", tool, t_in, t_out))
+        } else {
+            None
+        };
+        
+        (Some(prompt), action_msg, Some(last_msg), sid)
+    } else {
+        // 非 Claude 模式下，尝试直接从 JSON 根部读取标准字段
+        (
+            input.get("prompt").and_then(|v| v.as_str()),
+            input.get("action").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            input.get("summary").and_then(|v| v.as_str()),
+            input.get("session_id").and_then(|v| v.as_str())
+        )
+    };
+
+    let home = get_home();
+    let mut hippo = hippocampus::Hippocampus::new(&home)?;
+
+    match hook_type {
+        "auto" => {
+            // 1. 尝试记录行为 (Action/ToolUse)
+            if let Some(action) = event_action {
+                let _ = hippo.auto_remember(&action, "action", session_id, false);
+            }
+
+            // 2. 尝试召回并记录提示词 (Prompt/Dialogue)
+            if let Some(prompt) = event_prompt {
+                if !prompt.is_empty() {
+                    // 【改进】1. 先进行召回（只寻找过去的记忆）
+                    let results = hippo.recall(prompt, 3, 0.05, true, None, None);
+                    
+                    // 【改进】2. 召回后再记录当前输入（确保不被本次召回看到）
+                    let _ = hippo.auto_remember(prompt, "dialogue", session_id, false);
+                    
+                    if !results.is_empty() {
+                        let mut mem_context = String::from("🧠 海马体召回背景记忆：\n");
+                        for r in results {
+                            let content = r.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                            let layer = r.get("layer").and_then(|v| v.as_str()).unwrap_or("?");
+                            mem_context.push_str(&format!("- [{}] {}\n", layer, content));
+                        }
+                        if is_claude {
+                            print_json(&serde_json::json!({ "systemMessage": mem_context }));
+                        } else {
+                            print_json(&serde_json::json!({ "context": mem_context }));
+                        }
+                    }
+                }
+            }
+        },
+        "recall" => {
+            if let Some(prompt) = event_prompt {
+                if !prompt.is_empty() {
+                    // 【改进】先召回，后记忆
+                    let results = hippo.recall(prompt, 3, 0.05, true, None, None);
+                    let _ = hippo.auto_remember(prompt, "dialogue", session_id, false);
+                    
+                    if !results.is_empty() {
+                        let mut mem_context = String::from("🧠 海马体召回背景记忆：\n");
+                        for r in results {
+                            let content = r.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                            let layer = r.get("layer").and_then(|v| v.as_str()).unwrap_or("?");
+                            mem_context.push_str(&format!("- [{}] {}\n", layer, content));
+                        }
+                        if is_claude {
+                            print_json(&serde_json::json!({ "systemMessage": mem_context }));
+                        } else {
+                            print_json(&serde_json::json!({ "context": mem_context }));
+                        }
+                    }
+                }
+            }
+        },
+        "record" => {
+            if let Some(action) = event_action {
+                let _ = hippo.auto_remember(&action, "action", session_id, false);
+            }
+        },
+        "summarize" => {
+            if let Some(summary) = event_summary {
+                if !summary.is_empty() {
+                    let _ = hippo.auto_remember(summary, "dialogue", session_id, false);
+                }
+            }
+        },
+        _ => {}
+    }
     Ok(())
 }

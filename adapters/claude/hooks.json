@@ -1,12 +1,34 @@
 {
   "hooks": {
-    "Stop": [
+    "UserPromptSubmit": [
       {
-        "matcher": "",
+        "matcher": ".*",
         "hooks": [
           {
             "type": "command",
-            "command": "hippocampus gate --message \"$CLAUDE_LAST_USER_MESSAGE\" --write 2>/dev/null || true"
+            "command": "hippocampus hook auto --claude"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|WriteFile",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "hippocampus hook auto --claude"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "hippocampus hook summarize --claude"
           }
         ]
       }
