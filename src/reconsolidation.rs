@@ -142,8 +142,10 @@ impl Reconsolidation {
 fn extract_cjk_words(text: &str, min_len: usize, max_len: usize) -> Vec<String> {
     let cjk: Vec<char> = text.chars().filter(|c| ('\u{4e00}'..='\u{9fff}').contains(c)).collect();
     let mut words = vec![];
+    if cjk.is_empty() { return words; }
     for len in min_len..=max_len {
-        for i in 0..=cjk.len().saturating_sub(len) {
+        if len > cjk.len() { continue; }
+        for i in 0..=cjk.len() - len {
             let s: String = cjk[i..i + len].iter().collect();
             words.push(s);
         }

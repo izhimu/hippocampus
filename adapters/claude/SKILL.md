@@ -72,6 +72,7 @@ hippocampus remember --content "内容" --importance 7 --permanent
 |------|------|------|
 | 每天 22:30 | `hippocampus reflect --days 3` | 反思巩固近期记忆 |
 | 每月 1 日 | `hippocampus vacuum` | 清理整理长期记忆 |
+| 每次 /clear | `SessionStart (clear)` | 自动触发记忆整理 |
 
 ## 环境变量
 

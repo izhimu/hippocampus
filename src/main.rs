@@ -780,14 +780,69 @@ fn cmd_vacuum() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_gateway(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let sub_cmd = args.get(0).map(|s| s.as_str()).unwrap_or("");
+    let home = get_home();
+    let pid_path = std::path::Path::new(&home).join("gateway.pid");
+    let log_path = std::path::Path::new(&home).join("gateway.log");
+
+    match sub_cmd {
+        "start" => {
+            if pid_path.exists() {
+                let old_pid = std::fs::read_to_string(&pid_path).unwrap_or_default();
+                eprintln!("⚠️ Gateway 似乎已在运行 (PID: {})。请先执行 stop。", old_pid);
+                return Ok(());
+            }
+            let port = arg_val(args, "--port").unwrap_or_else(|| "8088".to_string());
+            let current_exe = std::env::current_exe()?;
+            
+            println!("🚀 正在后台启动 Gateway (Port: {})...", port);
+            let child = std::process::Command::new(current_exe)
+                .arg("gateway")
+                .arg("--port")
+                .arg(&port)
+                .stdout(std::fs::File::create(&log_path)?)
+                .stderr(std::fs::File::create(&log_path)?)
+                .spawn()?;
+            
+            let pid = child.id();
+            std::fs::write(&pid_path, pid.to_string())?;
+            println!("✅ Gateway 已启动。PID: {}, Log: {}", pid, log_path.display());
+            return Ok(());
+        }
+        "stop" => {
+            if !pid_path.exists() {
+                eprintln!("❌ 未发现运行中的 Gateway (未找到 gateway.pid)");
+                return Ok(());
+            }
+            let pid_str = std::fs::read_to_string(&pid_path)?;
+            let pid: u32 = pid_str.trim().parse()?;
+            
+            println!("🛑 正在停止 Gateway (PID: {})...", pid);
+            #[cfg(unix)]
+            {
+                let _ = std::process::Command::new("kill").arg(pid.to_string()).status();
+            }
+            #[cfg(windows)]
+            {
+                let _ = std::process::Command::new("taskkill").arg("/F").arg("/PID").arg(pid.to_string()).status();
+            }
+            
+            let _ = std::fs::remove_file(&pid_path);
+            println!("✅ Gateway 已停止。");
+            return Ok(());
+        }
+        _ => {}
+    }
+
     if has_flag(args, "--help") || has_flag(args, "-h") {
         eprintln!("🧠 hippocampus gateway — Web Console");
         eprintln!();
-        eprintln!("Usage: hippocampus gateway [--port PORT]");
+        eprintln!("Usage:");
+        eprintln!("  hippocampus gateway [start|stop]");
+        eprintln!("  hippocampus gateway [--port PORT]");
         eprintln!();
         eprintln!("Options:");
         eprintln!("  --port PORT   Listen port (default: 8088)");
-        eprintln!("  --help, -h    Show this help");
         eprintln!();
         eprintln!("API Endpoints:");
         eprintln!("  GET  /api/stats          Memory statistics");
@@ -868,16 +923,40 @@ fn cmd_hook(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                     
                     if !results.is_empty() {
                         let mut mem_context = String::from("🧠 海马体召回背景记忆：\n");
-                        for r in results {
+                        for r in &results {
                             let content = r.get("content").and_then(|v| v.as_str()).unwrap_or("");
                             let layer = r.get("layer").and_then(|v| v.as_str()).unwrap_or("?");
                             mem_context.push_str(&format!("- [{}] {}\n", layer, content));
                         }
+                        
                         if is_claude {
-                            print_json(&serde_json::json!({ "systemMessage": mem_context }));
+                            // 方案 1+3: 提取第一条记忆的预览并进行拟人化描述
+                            let preview: String = results[0].get("content")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.chars().take(20).collect())
+                                .unwrap_or_else(|| "...".to_string());
+                            let ui_msg = format!("🧠 Hippocampus: 我想起了关于 \"{}...\" 的相关记忆 (共 {} 条)", 
+                                preview, results.len());
+
+                            let mut response = serde_json::json!({
+                                "continue": true,
+                                "additionalContext": mem_context,
+                                "systemMessage": ui_msg
+                            });
+
+                            if hook_type == "auto" || hook_type == "recall" {
+                                response["hookSpecificOutput"] = serde_json::json!({
+                                    "hookEventName": "UserPromptSubmit",
+                                    "additionalContext": mem_context
+                                });
+                            }
+                            print_json(&response);
                         } else {
                             print_json(&serde_json::json!({ "context": mem_context }));
                         }
+                    } else if is_claude {
+                        // 没有结果时保持静默，但返回合法的 JSON 以符合规范
+                        print_json(&serde_json::json!({ "continue": true }));
                     }
                 }
             }
@@ -885,7 +964,6 @@ fn cmd_hook(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         "recall" => {
             if let Some(prompt) = event_prompt {
                 if !prompt.is_empty() {
-                    // 【改进】先召回，后记忆
                     let results = hippo.recall(prompt, 3, 0.05, true, None, None);
                     if let Ok(d) = hippo.auto_remember(prompt, "dialogue", session_id, false) {
                         last_decision = Some(d);
@@ -893,16 +971,34 @@ fn cmd_hook(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                     
                     if !results.is_empty() {
                         let mut mem_context = String::from("🧠 海马体召回背景记忆：\n");
-                        for r in results {
+                        for r in &results {
                             let content = r.get("content").and_then(|v| v.as_str()).unwrap_or("");
                             let layer = r.get("layer").and_then(|v| v.as_str()).unwrap_or("?");
                             mem_context.push_str(&format!("- [{}] {}\n", layer, content));
                         }
+                        
                         if is_claude {
-                            print_json(&serde_json::json!({ "systemMessage": mem_context }));
+                            let preview: String = results[0].get("content")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.chars().take(20).collect())
+                                .unwrap_or_else(|| "...".to_string());
+                            let ui_msg = format!("🧠 Hippocampus: 我想起了关于 \"{}...\" 的相关记忆 (共 {} 条)", 
+                                preview, results.len());
+
+                            print_json(&serde_json::json!({
+                                "continue": true,
+                                "additionalContext": mem_context,
+                                "systemMessage": ui_msg,
+                                "hookSpecificOutput": {
+                                    "hookEventName": "UserPromptSubmit",
+                                    "additionalContext": mem_context
+                                }
+                            }));
                         } else {
                             print_json(&serde_json::json!({ "context": mem_context }));
                         }
+                    } else if is_claude {
+                        print_json(&serde_json::json!({ "continue": true }));
                     }
                 }
             }
@@ -919,7 +1015,39 @@ fn cmd_hook(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 if !summary.is_empty() {
                     if let Ok(d) = hippo.auto_remember(summary, "dialogue", session_id, false) {
                         last_decision = Some(d);
+                        
+                        if is_claude {
+                            print_json(&serde_json::json!({
+                                "continue": true,
+                                "systemMessage": "🧠 Hippocampus: 今日对话已摘要，这段经历已被存入我的长期记忆库。",
+                                "hookSpecificOutput": {
+                                    "hookEventName": "Stop"
+                                }
+                            }));
+                        }
                     }
+                }
+            }
+        },
+        "reflect" => {
+            // 执行记忆整理 (Reflect)
+            if let Ok(res) = hippo.reflect(3) {
+                if is_claude {
+                    let total = res.reconsolidated + res.vacuum.l1_to_l2 + res.vacuum.l2_to_l3;
+                    let mut response = serde_json::json!({ "continue": true });
+                    if total > 0 {
+                        let ui_msg = format!("🧠 Hippocampus: 睡眠反思周期结束。已有 {} 条重要印迹被加深并归档。", total);
+                        response["systemMessage"] = serde_json::json!(ui_msg);
+                        response["hookSpecificOutput"] = serde_json::json!({
+                            "hookEventName": "SessionStart",
+                            "additionalContext": ui_msg
+                        });
+                    }
+                    print_json(&response);
+                } else {
+                    let msg = format!("🧠 记忆反思完成。巩固: {}, Vacuum: L1->L2: {}, L2->L3: {}", 
+                        res.reconsolidated, res.vacuum.l1_to_l2, res.vacuum.l2_to_l3);
+                    print_json(&serde_json::json!({ "context": msg }));
                 }
             }
         },
