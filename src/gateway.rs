@@ -68,6 +68,7 @@ pub async fn run_gateway(port: u16) -> Result<(), Box<dyn std::error::Error + Se
         .route("/api/recall", post(api_recall))
         .route("/api/gate", post(api_gate))
         .route("/api/gate/execute", post(api_gate_execute))
+        .route("/api/notify", post(api_notify))
         .route("/api/events", get(api_events))
         .with_state(state)
         .layer(CorsLayer::permissive());
@@ -317,6 +318,15 @@ async fn api_gate_execute(
     })
     .await;
     unwrap_res(res)
+}
+
+async fn api_notify(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let tx = state.tx.clone();
+    let _ = tx.send(payload.to_string());
+    Json(json!({"status": "ok", "message": "Notification broadcasted"}))
 }
 
 // --- WebSocket ---

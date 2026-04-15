@@ -460,6 +460,18 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
                 if (data.components) REGION_KEYS.forEach(k => updateGauge(k, data.components[k] || 0));
                 updateDecision(data.decision_score || 0, data.should_remember);
                 if (data.type === 'gate_execute') fetchStats();
+            } else if (data.type === 'hook_event') {
+                // CLI hook 触发的同步事件
+                console.log('Neural Hook received:', data.hook_type);
+                // 触发随机神经元闪烁，表示后台正在处理
+                const randomRegion = REGION_KEYS[Math.floor(Math.random() * REGION_KEYS.length)];
+                triggerNeuralEvent(randomRegion, 0.8);
+                // 延迟刷新，确保磁盘写入完成
+                setTimeout(() => {
+                    fetchStats();
+                    const activeTab = document.querySelector('#layer-tabs button.active');
+                    if (activeTab && activeTab.textContent === 'L1') loadEngrams('L1');
+                }, 1000);
             }
         };
     }
