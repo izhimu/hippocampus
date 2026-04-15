@@ -14,16 +14,14 @@ fn print_json<T: serde::Serialize>(val: &T) {
 
 /// 通知 Gateway 发生了更新（实现 CLI 和 Web 同步，跨平台支持）
 fn notify_gateway(payload: &serde_json::Value) {
-    let payload_clone = payload.clone();
-    // 在新线程中执行，避免阻塞 CLI 主逻辑，同时设置极短超时以应对 gateway 未启动的情况
-    std::thread::spawn(move || {
-        let config = ureq::Agent::config_builder()
-            .timeout_global(Some(std::time::Duration::from_millis(500)))
-            .build();
-        let agent: ureq::Agent = config.into();
-        let _ = agent.post("http://localhost:8088/api/notify")
-            .send_json(payload_clone);
-    });
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_millis(500)))
+        .build();
+    let agent: ureq::Agent = config.into();
+    // 使用同步方式发送，确保 CLI 进程退出前请求已发出
+    // 如果 Gateway 没开，500ms 后会自动跳过，不会长时间阻塞
+    let _ = agent.post("http://127.0.0.1:8088/api/notify")
+        .send_json(payload.clone());
 }
 
 /// 从 args 中找 --flag 的值（支持 --flag value 格式）
