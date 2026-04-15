@@ -844,12 +844,15 @@ fn cmd_hook(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
     let home = get_home();
     let mut hippo = hippocampus::Hippocampus::new(&home)?;
+    let mut last_decision: Option<hippocampus::MemoryDecision> = None;
 
     match hook_type {
         "auto" => {
             // 1. 尝试记录行为 (Action/ToolUse)
             if let Some(action) = event_action {
-                let _ = hippo.auto_remember(&action, "action", session_id, false);
+                if let Ok(d) = hippo.auto_remember(&action, "action", session_id, false) {
+                    last_decision = Some(d);
+                }
             }
 
             // 2. 尝试召回并记录提示词 (Prompt/Dialogue)
@@ -859,7 +862,9 @@ fn cmd_hook(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                     let results = hippo.recall(prompt, 3, 0.05, true, None, None);
                     
                     // 【改进】2. 召回后再记录当前输入（确保不被本次召回看到）
-                    let _ = hippo.auto_remember(prompt, "dialogue", session_id, false);
+                    if let Ok(d) = hippo.auto_remember(prompt, "dialogue", session_id, false) {
+                        last_decision = Some(d);
+                    }
                     
                     if !results.is_empty() {
                         let mut mem_context = String::from("🧠 海马体召回背景记忆：\n");
@@ -882,7 +887,9 @@ fn cmd_hook(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 if !prompt.is_empty() {
                     // 【改进】先召回，后记忆
                     let results = hippo.recall(prompt, 3, 0.05, true, None, None);
-                    let _ = hippo.auto_remember(prompt, "dialogue", session_id, false);
+                    if let Ok(d) = hippo.auto_remember(prompt, "dialogue", session_id, false) {
+                        last_decision = Some(d);
+                    }
                     
                     if !results.is_empty() {
                         let mut mem_context = String::from("🧠 海马体召回背景记忆：\n");
@@ -902,13 +909,17 @@ fn cmd_hook(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         },
         "record" => {
             if let Some(action) = event_action {
-                let _ = hippo.auto_remember(&action, "action", session_id, false);
+                if let Ok(d) = hippo.auto_remember(&action, "action", session_id, false) {
+                    last_decision = Some(d);
+                }
             }
         },
         "summarize" => {
             if let Some(summary) = event_summary {
                 if !summary.is_empty() {
-                    let _ = hippo.auto_remember(summary, "dialogue", session_id, false);
+                    if let Ok(d) = hippo.auto_remember(summary, "dialogue", session_id, false) {
+                        last_decision = Some(d);
+                    }
                 }
             }
         },
@@ -916,11 +927,33 @@ fn cmd_hook(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 发送同步通知给 Gateway
-    notify_gateway(&serde_json::json!({
-        "type": "hook_event",
+    let mut notify_payload = serde_json::json!({
+        "type": "gate_execute", // 使用 gate_execute 以触发 3D 动效 + 数据刷新
         "hook_type": hook_type,
         "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
-    }));
+    });
+
+    // 如果有决策数据，带上脑区得分实现真实表现
+    if let Some(d) = last_decision {
+        notify_payload["components"] = serde_json::json!({
+            "amygdala": d.components.amygdala.score,
+            "hippocampus": d.components.hippocampus.score,
+            "prefrontal": d.components.prefrontal.score,
+            "temporal": d.components.temporal.score,
+        });
+        notify_payload["decision_score"] = serde_json::json!(d.decision_score);
+        notify_payload["should_remember"] = serde_json::json!(d.should_remember);
+    } else {
+        // 如果没有决策（纯 recall 或失败），模拟一次通用的神经活动
+        notify_payload["components"] = serde_json::json!({
+            "amygdala": 0.2,
+            "hippocampus": 0.8,
+            "prefrontal": 0.6,
+            "temporal": 0.4,
+        });
+    }
+
+    notify_gateway(&notify_payload);
 
     Ok(())
 }
