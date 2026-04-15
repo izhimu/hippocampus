@@ -5,138 +5,171 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>海马体认知系统</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
     <link rel="stylesheet" href="/style.css">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><circle cx=%2250%22 cy=%2250%22 r=%2245%22 fill=%22none%22 stroke=%22%2300f3ff%22 stroke-width=%225%22 opacity=%220.5%22/><circle cx=%2250%22 cy=%2250%22 r=%2210%22 fill=%22%2300f3ff%22/><path d=%22M50 50 L20 20 M50 50 L80 20 M50 50 L50 85%22 stroke=%22%2300f3ff%22 stroke-width=%223%22 stroke-linecap=%22round%22 opacity=%220.8%22/></svg>">
+    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
 </head>
-<body class="bg-gray-950 text-gray-100 overflow-hidden">
-    <div class="flex h-screen">
-        <!-- 3D Canvas Area -->
-        <div class="flex-1 relative">
-            <div id="canvas-container" class="w-full h-full"></div>
-            <!-- Overlay: Gate Result -->
-            <div id="gate-overlay" class="hidden absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div id="gate-result-card" class="bg-gray-900/90 backdrop-blur rounded-2xl p-6 max-w-md border border-gray-700 shadow-2xl">
-                    <h3 class="text-lg font-bold mb-2" id="gate-result-title">Gate Evaluation</h3>
-                    <div id="gate-result-body" class="text-sm space-y-1"></div>
+<body class="bg-gray-950 text-gray-100 overflow-hidden selection:bg-cyan-500/30">
+    <!-- 背景 3D 渲染 -->
+    <div id="canvas-container" class="fixed inset-0 z-0"></div>
+    
+    <!-- 左侧面板：状态与监控 -->
+    <div id="panel-left" class="fixed top-6 left-6 z-10 w-80 space-y-4 pointer-events-none">
+        <div class="hud-panel pointer-events-auto">
+            <div class="flex items-center justify-between mb-4">
+                <h1 class="text-lg font-bold bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent font-mono tracking-wider">HIPPOCAMPUS</h1>
+                <div id="ws-status" class="text-g5 uppercase tracking-widest flex items-center gap-1.5">
+                    <span class="w-1.5 h-1.5 rounded-full bg-gray-600"></span> 离线
                 </div>
+            </div>
+            
+            <div class="grid grid-cols-3 gap-3">
+                <div class="stat-box">
+                    <div class="text-g1 text-cyan-400 font-mono" id="stat-l1">0</div>
+                    <div class="text-g5 uppercase mt-1">L1 短期</div>
+                    <div class="sparkline-container"><div id="spark-l1" class="sparkline-fill bg-cyan-400/80" style="width: 0%"></div></div>
+                </div>
+                <div class="stat-box">
+                    <div class="text-g1 text-amber-400 font-mono" id="stat-l2">0</div>
+                    <div class="text-g5 uppercase mt-1">L2 中期</div>
+                    <div class="sparkline-container"><div id="spark-l2" class="sparkline-fill bg-amber-400/80" style="width: 0%"></div></div>
+                </div>
+                <div class="stat-box">
+                    <div class="text-g1 text-purple-400 font-mono" id="stat-l3">0</div>
+                    <div class="text-g5 uppercase mt-1">L3 长期</div>
+                    <div class="sparkline-container"><div id="spark-l3" class="sparkline-fill bg-purple-400/80" style="width: 0%"></div></div>
+                </div>
+            </div>
+            <div class="mt-3 flex justify-between">
+                <span class="text-g5 uppercase font-mono">总记忆迹 (TOTAL)</span>
+                <span id="stat-total" class="text-g4 text-gray-200">0</span>
             </div>
         </div>
 
-        <!-- Side Panel -->
-        <div class="w-96 bg-gray-900/80 backdrop-blur border-l border-gray-800 flex flex-col overflow-hidden">
-            <!-- Header -->
-            <div class="p-4 border-b border-gray-800">
-                <h1 class="text-xl font-bold bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">
-                    Hippocampus
-                </h1>
-                <p class="text-xs text-gray-500 mt-1">仿生认知记忆系统</p>
-            </div>
-
-            <!-- Stats Cards -->
-            <div class="p-4 border-b border-gray-800">
-                <div class="grid grid-cols-3 gap-2">
-                    <div class="bg-gray-800/60 rounded-lg p-2 text-center">
-                        <div class="text-2xl font-bold text-cyan-400" id="stat-l1">0</div>
-                        <div class="text-xs text-gray-500">L1 短期记忆</div>
+        <div class="hud-panel pointer-events-auto">
+            <h2 class="text-g3 mb-5 flex justify-between">神经活动 <span>Real-time</span></h2>
+            <div class="space-y-5">
+                <!-- 脑区进度条 (Source Anchors) -->
+                <div class="gauge-container" id="row-amygdala">
+                    <div class="flex justify-between mb-1.5">
+                        <span class="text-g4 text-red-400/80 uppercase">Amygdala</span>
+                        <span class="text-g4 text-gray-400" id="score-amygdala">0.00</span>
                     </div>
-                    <div class="bg-gray-800/60 rounded-lg p-2 text-center">
-                        <div class="text-2xl font-bold text-amber-400" id="stat-l2">0</div>
-                        <div class="text-xs text-gray-500">L2 中期记忆</div>
-                    </div>
-                    <div class="bg-gray-800/60 rounded-lg p-2 text-center">
-                        <div class="text-2xl font-bold text-purple-400" id="stat-l3">0</div>
-                        <div class="text-xs text-gray-500">L3 长期记忆</div>
+                    <div class="h-1.5 bg-gray-800/50 rounded-full overflow-hidden border border-gray-700/30">
+                        <div id="gauge-amygdala" class="h-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)] transition-all duration-150" style="width:0%"></div>
                     </div>
                 </div>
-                <div class="mt-2 flex items-center justify-between text-xs text-gray-500">
-                    <span>总计: <span id="stat-total" class="text-gray-300">0</span></span>
-                    <span id="ws-status" class="flex items-center gap-1">
-                        <span class="w-2 h-2 rounded-full bg-gray-600 inline-block"></span> 未连接
-                    </span>
-                </div>
-            </div>
-
-            <!-- Brain Region Gauges -->
-            <div class="p-4 border-b border-gray-800">
-                <h2 class="text-sm font-semibold text-gray-400 mb-3">脑区活动</h2>
-                <div class="space-y-2">
-                    <div class="flex items-center gap-2">
-                        <span class="text-xs w-16 text-red-400">杏仁核</span>
-                        <div class="flex-1 h-4 bg-gray-800 rounded-full overflow-hidden">
-                            <div id="gauge-amygdala" class="h-full bg-gradient-to-r from-red-600 to-red-400 rounded-full transition-all duration-500" style="width:0%"></div>
-                        </div>
-                        <span class="text-xs w-10 text-right text-gray-400" id="score-amygdala">0.00</span>
+                <div class="gauge-container" id="row-hippocampus">
+                    <div class="flex justify-between mb-1.5">
+                        <span class="text-g4 text-yellow-400/80 uppercase">Hippocampus</span>
+                        <span class="text-g4 text-gray-400" id="score-hippocampus">0.00</span>
                     </div>
-                    <div class="flex items-center gap-2">
-                        <span class="text-xs w-16 text-yellow-400">海马体</span>
-                        <div class="flex-1 h-4 bg-gray-800 rounded-full overflow-hidden">
-                            <div id="gauge-hippocampus" class="h-full bg-gradient-to-r from-yellow-600 to-yellow-400 rounded-full transition-all duration-500" style="width:0%"></div>
-                        </div>
-                        <span class="text-xs w-10 text-right text-gray-400" id="score-hippocampus">0.00</span>
-                    </div>
-                    <div class="flex items-center gap-2">
-                        <span class="text-xs w-16 text-blue-400">前额叶</span>
-                        <div class="flex-1 h-4 bg-gray-800 rounded-full overflow-hidden">
-                            <div id="gauge-prefrontal" class="h-full bg-gradient-to-r from-blue-600 to-blue-400 rounded-full transition-all duration-500" style="width:0%"></div>
-                        </div>
-                        <span class="text-xs w-10 text-right text-gray-400" id="score-prefrontal">0.00</span>
-                    </div>
-                    <div class="flex items-center gap-2">
-                        <span class="text-xs w-16 text-green-400">颞叶</span>
-                        <div class="flex-1 h-4 bg-gray-800 rounded-full overflow-hidden">
-                            <div id="gauge-temporal" class="h-full bg-gradient-to-r from-green-600 to-green-400 rounded-full transition-all duration-500" style="width:0%"></div>
-                        </div>
-                        <span class="text-xs w-10 text-right text-gray-400" id="score-temporal">0.00</span>
+                    <div class="h-1.5 bg-gray-800/50 rounded-full overflow-hidden border border-gray-700/30">
+                        <div id="gauge-hippocampus" class="h-full bg-yellow-500 shadow-[0_0_8px_rgba(234,179,8,0.5)] transition-all duration-150" style="width:0%"></div>
                     </div>
                 </div>
-                <div class="mt-3 flex items-center gap-2">
-                    <span class="text-xs text-gray-500">决策:</span>
-                    <span class="text-sm font-bold" id="decision-score">0.000</span>
-                    <span class="text-xs px-2 py-0.5 rounded-full" id="decision-badge">待机</span>
+                <div class="gauge-container" id="row-prefrontal">
+                    <div class="flex justify-between mb-1.5">
+                        <span class="text-g4 text-blue-400/80 uppercase">Prefrontal</span>
+                        <span class="text-g4 text-gray-400" id="score-prefrontal">0.00</span>
+                    </div>
+                    <div class="h-1.5 bg-gray-800/50 rounded-full overflow-hidden border border-gray-700/30">
+                        <div id="gauge-prefrontal" class="h-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)] transition-all duration-150" style="width:0%"></div>
+                    </div>
+                </div>
+                <div class="gauge-container" id="row-temporal">
+                    <div class="flex justify-between mb-1.5">
+                        <span class="text-g4 text-green-400/80 uppercase">Temporal</span>
+                        <span class="text-g4 text-gray-400" id="score-temporal">0.00</span>
+                    </div>
+                    <div class="h-1.5 bg-gray-800/50 rounded-full overflow-hidden border border-gray-700/30">
+                        <div id="gauge-temporal" class="h-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)] transition-all duration-150" style="width:0%"></div>
+                    </div>
                 </div>
             </div>
-
-            <!-- Gate Evaluation Input -->
-            <div class="p-4 border-b border-gray-800">
-                <h2 class="text-sm font-semibold text-gray-400 mb-2">门控评估</h2>
-                <div class="flex gap-2">
-                    <input id="gate-input" type="text" placeholder="输入消息进行评估..."
-                        class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:border-purple-500 focus:outline-none">
-                    <button onclick="doGate(false)" class="px-3 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors">
-                        评估
-                    </button>
-                    <button onclick="doGate(true)" class="px-3 py-2 bg-purple-600 hover:bg-purple-500 rounded-lg text-sm font-medium transition-colors">
-                        写入
-                    </button>
+            <div class="mt-6 pt-4 border-t border-gray-800/50 flex items-center justify-between">
+                <span class="text-g5 uppercase font-mono tracking-tighter">Decision Confidence</span>
+                <div class="flex items-center gap-3">
+                    <span class="text-g1 text-cyan-400 font-mono" id="decision-score">0.000</span>
+                    <span id="decision-badge" class="text-g5 px-2 py-0.5 rounded border border-gray-700 uppercase">Idle</span>
                 </div>
-            </div>
-
-            <!-- Search -->
-            <div class="p-4 border-b border-gray-800">
-                <h2 class="text-sm font-semibold text-gray-400 mb-2">检索记忆</h2>
-                <div class="flex gap-2">
-                    <input id="search-input" type="text" placeholder="搜索关键词..."
-                        class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none">
-                    <button onclick="doSearch()" class="px-3 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm font-medium transition-colors">
-                        回忆
-                    </button>
-                </div>
-                <div id="search-results" class="mt-2 max-h-32 overflow-y-auto text-xs space-y-1"></div>
-            </div>
-
-            <!-- Recent Memory Feed -->
-            <div class="flex-1 p-4 overflow-y-auto">
-                <h2 class="text-sm font-semibold text-gray-400 mb-2">近期记忆</h2>
-                <div class="flex gap-2 mb-2">
-                    <button onclick="loadEngrams('L1')" class="px-2 py-1 text-xs bg-cyan-900/40 hover:bg-cyan-800/60 rounded transition-colors">L1</button>
-                    <button onclick="loadEngrams('L2')" class="px-2 py-1 text-xs bg-amber-900/40 hover:bg-amber-800/60 rounded transition-colors">L2</button>
-                    <button onclick="loadEngrams('L3')" class="px-2 py-1 text-xs bg-purple-900/40 hover:bg-purple-800/60 rounded transition-colors">L3</button>
-                </div>
-                <div id="engram-feed" class="space-y-2"></div>
             </div>
         </div>
     </div>
 
-    <script src="/app.js"></script>
+    <!-- 右侧面板：记忆与检索 -->
+    <div id="panel-right" class="fixed top-6 right-6 bottom-32 z-10 w-96 space-y-4 flex flex-col pointer-events-none">
+        <div class="hud-panel pointer-events-auto">
+            <h2 class="text-g3 mb-4">记忆检索接口 (RECALL)</h2>
+            <div class="flex gap-2">
+                <input id="search-input" type="text" placeholder="输入关键字..."
+                    class="flex-1 bg-gray-950/50 border border-gray-700/50 rounded px-3 py-2 text-g2 focus:border-cyan-500/50 focus:outline-none transition-colors font-mono">
+                <button onclick="doSearch()" class="px-4 py-2 bg-cyan-900/30 hover:bg-cyan-800/50 border border-cyan-700/30 rounded text-g4 text-cyan-400 transition-all">执行</button>
+            </div>
+            <div id="search-results" class="mt-4 max-h-40 overflow-y-auto space-y-2 pr-1 custom-scrollbar"></div>
+        </div>
+
+        <div class="hud-panel pointer-events-auto flex-1 flex flex-col min-h-0">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-g3">记忆流 (STREAM)</h2>
+                <div class="flex gap-1" id="layer-tabs">
+                    <button onclick="loadEngrams('L1')" class="control-btn px-2 py-0.5 active">L1</button>
+                    <button onclick="loadEngrams('L2')" class="control-btn px-2 py-0.5">L2</button>
+                    <button onclick="loadEngrams('L3')" class="control-btn px-2 py-0.5">L3</button>
+                </div>
+            </div>
+            <div id="engram-feed" class="flex-1 overflow-y-auto custom-scrollbar pb-2"></div>
+        </div>
+    </div>
+
+    <!-- 底部：命令输入 -->
+    <div id="panel-bottom" class="fixed bottom-8 left-1/2 -translate-x-1/2 z-20 w-[600px] pointer-events-none">
+        <!-- 评估结果 -->
+        <div id="gate-overlay" class="hidden w-full mb-4">
+            <div id="gate-result-card" class="hud-panel p-5 w-full border-l-4 border-l-cyan-500">
+                <div class="flex items-center gap-3 mb-3 border-b border-gray-800 pb-3">
+                    <div id="gate-result-icon" class="w-6 h-6 text-cyan-400">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                    </div>
+                    <h3 class="text-g3 flex-1" id="gate-result-title">门控评估</h3>
+                    <div class="text-g5 uppercase font-mono" id="gate-ready-text">READY</div>
+                </div>
+                <div id="gate-result-body" class="text-g2 font-mono text-cyan-100/90 whitespace-pre-line min-h-[40px]"></div>
+            </div>
+        </div>
+
+        <div class="hud-panel p-1.5 pointer-events-auto bg-gray-900/40 backdrop-blur-xl border-cyan-500/20 shadow-[0_0_30px_rgba(0,0,0,0.5)]">
+            <div class="flex items-center gap-2">
+                <div class="pl-4 text-cyan-500/50 font-mono text-lg">&gt;</div>
+                <input id="gate-input" type="text" placeholder="输入认知消息..."
+                    class="flex-1 bg-transparent border-none px-2 py-3 text-g2 focus:outline-none font-mono placeholder:text-gray-600">
+                <div class="flex gap-1 pr-1">
+                    <button onclick="doGate(false)" class="control-btn px-4 py-2 !text-[11px]">评估</button>
+                    <button onclick="doGate(true)" class="control-btn px-4 py-2 !text-[11px] !border-cyan-500/30 !text-cyan-400">写入</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 右下角控制 -->
+    <div class="fixed bottom-8 right-6 z-20 flex gap-3">
+        <button id="btn-focus" class="control-btn" onclick="toggleFocusMode()">专注</button>
+        <button id="btn-audio" class="control-btn" onclick="toggleAudio()">静音</button>
+    </div>
+
+    <audio id="sound-hover" src="https://assets.mixkit.co/active_storage/sfx/2571/2571-preview.mp3" preload="auto"></audio>
+    <audio id="sound-click" src="https://assets.mixkit.co/active_storage/sfx/2568/2568-preview.mp3" preload="auto"></audio>
+    <audio id="sound-ambient" src="https://assets.mixkit.co/active_storage/sfx/2852/2852-preview.mp3" loop preload="auto"></audio>
+    <audio id="sound-type" src="https://assets.mixkit.co/active_storage/sfx/2569/2569-preview.mp3" preload="auto"></audio>
+
+    <script type="module" src="/app.js"></script>
 </body>
 </html>

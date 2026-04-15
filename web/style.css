@@ -1,87 +1,194 @@
-/* Hippocampus Gateway — Custom Styles */
+/* Hippocampus Gateway — Modular HUD Styles */
+
+:root {
+    --cyan: #00f3ff;
+    --blue: #3b82f6;
+    --purple: #b534ff;
+    --amber: #fbbf24;
+    --red: #ef4444;
+    --green: #22c55e;
+    --bg-dark: #020205;
+    
+    /* Modular Font Scale */
+    --f-g1: 1.25rem;   /* 20px - Core Stats */
+    --f-g2: 0.9375rem; /* 15px - Body Content */
+    --f-g3: 0.75rem;   /* 12px - Section Headers */
+    --f-g4: 0.6875rem; /* 11px - Labels */
+    --f-g5: 0.625rem;  /* 10px - Metadata */
+}
 
 * { box-sizing: border-box; }
 
 body {
     margin: 0;
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
-    background: #050510;
+    background: var(--bg-dark);
+    color: #e5e7eb;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
 }
 
-#canvas-container canvas {
-    display: block;
-    width: 100% !important;
-    height: 100% !important;
+.font-mono { font-family: 'Share Tech Mono', monospace; }
+
+/* --- Modular Typography Classes --- */
+.text-g1 { font-size: var(--f-g1); font-weight: 700; line-height: 1.2; }
+.text-g2 { font-size: var(--f-g2); font-weight: 400; line-height: 1.6; }
+.text-g3 { font-size: var(--f-g3); font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: #9ca3af; }
+.text-g4 { font-size: var(--f-g4); font-weight: 400; font-family: 'Share Tech Mono', monospace; }
+.text-g5 { font-size: var(--f-g5); font-weight: 300; color: #6b7280; }
+
+/* --- HUD Panels --- */
+.hud-panel {
+    background: rgba(10, 15, 25, 0.45);
+    backdrop-filter: blur(15px);
+    -webkit-backdrop-filter: blur(15px);
+    border: 1px solid rgba(0, 243, 255, 0.15); 
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.8), inset 0 0 15px rgba(0, 243, 255, 0.05);
+    border-radius: 4px;
+    padding: 20px; /* Unified Padding */
+    position: relative;
+    transition: all 0.5s cubic-bezier(0.19, 1, 0.22, 1);
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #374151; border-radius: 2px; }
-
-/* Gate overlay animation */
-#gate-overlay.visible {
-    display: flex !important;
-    animation: fadeIn 0.3s ease;
+.hud-panel:hover {
+    border-color: rgba(0, 243, 255, 0.3);
+    box-shadow: 0 8px 40px 0 rgba(0, 0, 0, 0.9), inset 0 0 20px rgba(0, 243, 255, 0.08);
 }
 
-#gate-overlay.hiding {
-    animation: fadeOut 0.5s ease forwards;
+/* --- Focus Mode Transitions --- */
+.panel-hidden-left { transform: translateX(-120%); opacity: 0; pointer-events: none; }
+.panel-hidden-right { transform: translateX(120%); opacity: 0; pointer-events: none; }
+.panel-hidden-bottom { transform: translateY(150%); opacity: 0; pointer-events: none; }
+#panel-left, #panel-right, #panel-bottom {
+    transition: transform 0.6s cubic-bezier(0.19, 1, 0.22, 1), opacity 0.6s ease;
 }
 
-@keyframes fadeIn {
-    from { opacity: 0; transform: scale(0.95); }
-    to { opacity: 1; transform: scale(1); }
+/* --- Components --- */
+
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    padding: 10px;
+    border-radius: 2px;
+    text-align: center;
 }
 
-@keyframes fadeOut {
-    from { opacity: 1; transform: scale(1); }
-    to { opacity: 0; transform: scale(0.95); }
-}
-
-/* Memory card */
 .memory-card {
-    background: rgba(30, 30, 50, 0.6);
-    border: 1px solid rgba(100, 100, 150, 0.2);
-    border-radius: 8px;
-    padding: 8px 10px;
-    transition: border-color 0.2s;
+    background: rgba(255, 255, 255, 0.02);
+    border-left: 2px solid rgba(255, 255, 255, 0.1);
+    padding: 14px;
+    margin-bottom: 12px;
+    transition: all 0.3s ease;
+    opacity: 0;
+    transform: translateY(10px);
+    animation: slideUpFade 0.4s ease forwards;
 }
 
 .memory-card:hover {
-    border-color: rgba(150, 130, 255, 0.4);
+    background: rgba(255, 255, 255, 0.05);
+    border-left-color: var(--cyan);
+    transform: translateX(4px);
 }
 
-/* Pulse animation for active brain regions */
-@keyframes pulse-glow {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.1); }
-    50% { box-shadow: 0 0 12px 4px rgba(255, 255, 255, 0.2); }
-}
-
-.pulse-active {
-    animation: pulse-glow 1s ease-in-out infinite;
-}
-
-/* Search result highlight */
 .search-result {
-    background: rgba(30, 30, 50, 0.5);
-    border-radius: 6px;
-    padding: 6px 8px;
-    border-left: 3px solid #06b6d4;
+    background: rgba(0, 243, 255, 0.03);
+    border: 1px solid rgba(0, 243, 255, 0.1);
+    padding: 12px;
+    border-radius: 2px;
+    margin-bottom: 8px;
+    opacity: 0;
+    transform: translateX(10px);
+    animation: slideLeftFade 0.4s ease forwards;
 }
 
-/* Decision badge colors */
-.badge-remember {
-    background: rgba(34, 197, 94, 0.2);
-    color: #4ade80;
+/* Highlight Text */
+.highlight-text {
+    background: rgba(0, 243, 255, 0.2);
+    color: #fff;
+    padding: 0 2px;
+    border-bottom: 1px solid var(--cyan);
 }
 
-.badge-reject {
-    background: rgba(239, 68, 68, 0.2);
-    color: #f87171;
-}
+/* --- Overlay & Results --- */
+#gate-overlay.visible { display: block !important; }
+#gate-overlay.visible #gate-result-card { opacity: 1; transform: translateY(0); }
+#gate-overlay.hiding #gate-result-card { opacity: 0; transform: translateY(10px); filter: blur(4px); }
 
-.badge-idle {
-    background: rgba(107, 114, 128, 0.2);
+/* --- Visual Touches --- */
+.sparkline-container { width: 100%; height: 2px; background: rgba(255,255,255,0.1); margin-top: 6px; overflow: hidden; }
+.sparkline-fill { height: 100%; transition: width 1s ease-out; }
+
+.custom-scrollbar::-webkit-scrollbar { width: 3px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.02); }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(0, 243, 255, 0.2); border-radius: 10px; }
+
+@keyframes slideUpFade { to { opacity: 1; transform: translateY(0); } }
+@keyframes slideLeftFade { to { opacity: 1; transform: translateX(0); } }
+
+/* Decision Badges */
+.badge-remember { background: rgba(34, 197, 94, 0.15); border-color: rgba(34, 197, 94, 0.3) !important; color: var(--green) !important; }
+.badge-reject { background: rgba(239, 68, 68, 0.15); border-color: rgba(239, 68, 68, 0.3) !important; color: var(--red) !important; }
+
+/* Control Buttons */
+.control-btn {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
     color: #9ca3af;
+    font-size: var(--f-g5);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    padding: 8px 12px;
+    border-radius: 4px;
+    transition: all 0.2s;
 }
+.control-btn:hover, .control-btn.active {
+    background: rgba(0,243,255,0.1);
+    border-color: var(--cyan);
+    color: #fff;
+}
+
+/* UI Scanline */
+body::after {
+    content: " "; display: block; position: fixed; top: 0; left: 0; bottom: 0; right: 0;
+    background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.02), rgba(0, 255, 0, 0.01), rgba(0, 0, 118, 0.02));
+    z-index: 100; background-size: 100% 4px, 3px 100%; pointer-events: none; opacity: 0.3;
+}
+
+/* 3D HUD Labels */
+.region-label {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-left: 10px;
+    border-left: 1px solid var(--cyan);
+    pointer-events: none;
+    transition: opacity 0.3s;
+    white-space: nowrap;
+    z-index: 5;
+}
+.region-label .label-name {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--cyan);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    text-shadow: 0 0 8px rgba(0, 243, 255, 0.5);
+}
+.region-label .label-value {
+    font-size: 14px;
+    font-family: 'Share Tech Mono', monospace;
+    color: #fff;
+}
+.region-label .label-leader {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    width: 20px;
+    height: 1px;
+    background: linear-gradient(90deg, var(--cyan), transparent);
+    transform: translateX(-100%);
+}
+
+.typewriter-cursor::after { content: '|'; animation: blink 1s step-end infinite; color: var(--cyan); }
+@keyframes blink { 50% { opacity: 0; } }
