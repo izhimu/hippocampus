@@ -192,12 +192,37 @@ async fn api_recall(
     Json(body): Json<RecallRequest>,
 ) -> Json<Value> {
     let home = state.home.clone();
+    let tx = state.tx.clone();
     let query = body.query;
     let top_k = body.top_k.unwrap_or(5);
 
     let res = tokio::task::spawn_blocking(move || -> Result<Value, String> {
         let hippo = crate::Hippocampus::new(&home).map_err(|e| e.to_string())?;
         let results = hippo.recall(&query, top_k, 0.01, true, None, None);
+        
+        // --- 模拟大脑检索状态并广播 ---
+        let avg_emotion: f64 = if results.is_empty() {
+            0.1
+        } else {
+            results.iter()
+                .filter_map(|r| r.get("emotion_score").and_then(|v| v.as_f64()))
+                .sum::<f64>() / (results.len() as f64)
+        };
+
+        let event = json!({
+            "type": "gate",
+            "timestamp": now_ts(),
+            "components": {
+                "amygdala": avg_emotion.max(0.2),
+                "hippocampus": 0.95,
+                "prefrontal": 0.75,
+                "temporal": 0.5,
+            },
+            "decision_score": 0.0,
+            "should_remember": false,
+        });
+        let _ = tx.send(event.to_string());
+
         Ok(json!({
             "status": "ok",
             "results": results,
