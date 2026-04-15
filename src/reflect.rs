@@ -15,12 +15,28 @@ pub struct Reflector {
     config: HippocampusConfig,
 }
 
+/// 🧠 语义化接口 (Scheme 4): 允许将零散记忆抽象为知识
+pub trait Semanticizer {
+    fn summarize(&self, contents: &[String]) -> Option<String>;
+}
+
+/// 基础语义化实现（暂无 LLM 时使用）
+pub struct PlaceholderSemanticizer;
+impl Semanticizer for PlaceholderSemanticizer {
+    fn summarize(&self, contents: &[String]) -> Option<String> {
+        if contents.len() < 3 { return None; }
+        // 简单逻辑：如果没有 LLM，只在反思日志记录合并动作，不执行实际合并
+        None
+    }
+}
+
 #[derive(serde::Serialize)]
 pub struct ReflectResult {
     pub semantic_network_learned: usize,
     pub pruned: usize,
     pub reconsolidated: usize,
     pub vacuum: VacuumResult,
+    pub semanticized_count: usize,
 }
 
 #[derive(serde::Serialize)]
@@ -67,7 +83,10 @@ impl Reflector {
         // 4. vacuum
         let vacuum = self.vacuum();
 
-        // 5. 🧠 学习关键词：从所有印迹中批量学习
+        // 5. 🧠 语义化抽象 (Scheme 4 - 预留)
+        let semanticized_count = self.semanticize(&PlaceholderSemanticizer);
+
+        // 6. 🧠 学习关键词：从所有印迹中批量学习
         let mut kw = crate::learned_keywords::LearnedKeywords::load(&self.config.learned_keywords_path);
         let all_for_learn = self.store.read_all().unwrap_or_default();
         for e in &all_for_learn {
@@ -81,7 +100,38 @@ impl Reflector {
             pruned,
             reconsolidated: consolidated,
             vacuum,
+            semanticized_count,
         }
+    }
+
+    /// 🧠 语义化抽象逻辑
+    fn semanticize<S: Semanticizer>(&self, engine: &S) -> usize {
+        let mut count = 0;
+        if let Ok(l1) = self.store.read_layer("L1") {
+            if l1.len() < 5 { return 0; }
+            
+            // 按情境标签分组 (简单模拟话题聚类)
+            let mut groups: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+            for e in l1 {
+                for tag in e.tags {
+                    if tag.starts_with("ctx:") {
+                        groups.entry(tag).or_default().push(e.content.clone());
+                    }
+                }
+            }
+            
+            for (_ctx, contents) in groups {
+                if contents.len() >= 3 {
+                    if let Some(_summary) = engine.summarize(&contents) {
+                        // 未来实现：
+                        // 1. 创建新的 L3 语义记忆 (summary)
+                        // 2. 删除原始 L1 记忆
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
     }
 
     /// Vacuum 整理

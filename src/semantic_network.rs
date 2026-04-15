@@ -77,34 +77,28 @@ impl SemanticNetwork {
         }
     }
 
-    /// 一阶直接连接 + 二阶扩散（衰减×0.5）
+    /// 一阶直接连接 + 二阶扩散（引入侧向抑制）
     pub fn get_associations(&self, word: &str, threshold: f64) -> Vec<(String, f64)> {
         let mut visited = HashSet::new();
         visited.insert(word.to_string());
-        let mut result = vec![];
+        let mut raw_results = vec![];
 
-        // 一阶
+        // 1. 获取一阶关联
         if let Some(node) = self.nodes.get(word) {
             for (w, &strength) in &node.connections {
-                if strength >= threshold {
-                    result.push((w.clone(), strength));
-                    visited.insert(w.clone());
-                }
+                raw_results.push((w.clone(), strength, 1)); // 1 代表一阶
             }
         }
 
-        // 二阶扩散
+        // 2. 获取二阶关联
         if let Some(node) = self.nodes.get(word) {
             for (w1, &s1) in &node.connections {
-                if s1 >= 0.2 {
+                if s1 >= 0.4 { // 只有足够强的连接才允许二阶扩散
                     if let Some(n1) = self.nodes.get(w1) {
                         for (w2, &s2) in &n1.connections {
-                            if !visited.contains(w2) && w2 != word {
-                                let score = (s1 * s2 * 0.5 * 1000.0).round() / 1000.0;
-                                if score >= 0.05 {
-                                    result.push((w2.clone(), score));
-                                    visited.insert(w2.clone());
-                                }
+                            if w2 != word {
+                                let score = s1 * s2 * 0.4; // 二阶衰减
+                                raw_results.push((w2.clone(), score, 2));
                             }
                         }
                     }
@@ -112,27 +106,60 @@ impl SemanticNetwork {
             }
         }
 
-        result.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        result
-    }
+        if raw_results.is_empty() { return vec![]; }
 
-    /// 查询扩展
-    pub fn expand_query(&self, tokens: &[String], top_k: usize) -> Vec<String> {
-        let mut added: HashSet<String> = tokens.iter().cloned().collect();
-        let mut extra = vec![];
+        // 3. 🧠 侧向抑制 (Lateral Inhibition)
+        // 找到最强的关联度
+        let max_strength = raw_results.iter().map(|r| r.1).fold(0.0, f64::max);
+        
+        let mut final_results = vec![];
+        let mut seen_max = HashMap::new();
 
-        for t in tokens {
-            for (assoc, _) in self.get_associations(t, 0.3) {
-                if !added.contains(&assoc) {
-                    added.insert(assoc.clone());
-                    extra.push(assoc);
-                    if extra.len() >= top_k {
-                        return extra;
-                    }
+        for (w, s, _level) in raw_results {
+            // 抑制算法：弱于最强项一定比例的连接被进一步压制（边缘对比度增强）
+            // 如果某连接强度只有最强的 30%，则视其为噪点，加速衰减
+            let inhibition_factor = if s < max_strength * 0.4 { 0.2 } else { 1.0 };
+            let final_s = (s * inhibition_factor * 1000.0).round() / 1000.0;
+            
+            if final_s >= threshold {
+                let entry = seen_max.entry(w.clone()).or_insert(0.0);
+                if final_s > *entry {
+                    *entry = final_s;
                 }
             }
         }
-        extra
+
+        for (w, s) in seen_max {
+            final_results.push((w, s));
+        }
+
+        final_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        final_results
+    }
+
+    /// 查询扩展（引入注意力竞争）
+    pub fn expand_query(&self, tokens: &[String], top_k: usize) -> Vec<String> {
+        let mut candidates: HashMap<String, f64> = HashMap::new();
+        let original_tokens: HashSet<String> = tokens.iter().cloned().collect();
+
+        for t in tokens {
+            // 降低阈值获取更多候选，但在后续进行竞争过滤
+            for (assoc, strength) in self.get_associations(t, 0.2) {
+                if !original_tokens.contains(&assoc) {
+                    // 🧠 共激活增强：如果多个 token 指向同一个关联词，累加权重
+                    *candidates.entry(assoc).or_insert(0.0) += strength;
+                }
+            }
+        }
+
+        let mut final_candidates: Vec<(String, f64)> = candidates.into_iter().collect();
+        // 根据最终累加权重排序
+        final_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        
+        final_candidates.into_iter()
+            .take(top_k)
+            .map(|(w, _)| w)
+            .collect()
     }
 
     /// 突触修剪

@@ -49,11 +49,25 @@ impl<'a> MemoryGate<'a> {
     }
 
     pub fn evaluate(&self, message: &str, session_context: &[String]) -> MemoryDecision {
-        // 前置过滤
+        // --- 1. 前置过滤与【前额叶一票否决】 ---
         let system_patterns = ["NO_REPLY", "HEARTBEAT_OK", "HEARTBEAT_", "[OpenClaw", "[Internal"];
         if system_patterns.iter().any(|p| message.contains(p)) {
             return self.reject("系统消息，过滤");
         }
+        
+        // 黑名单过滤 (从 config 加载)
+        for pattern in &self.config.auto_memory_blacklist {
+            if message.contains(pattern) {
+                return self.reject(&format!("命中黑名单关键词: {}", pattern));
+            }
+        }
+
+        // 🧠 前额叶否决逻辑：识别否定/取消记忆的意图
+        let veto_words = ["不用记", "别记", "忘掉刚才", "作废", "不要记录", "取消记忆", "别管这个", "忽略刚才"];
+        if veto_words.iter().any(|w| message.contains(w)) {
+            return self.reject("前额叶：识别到显式否定意图");
+        }
+
         if message.trim().len() < 3 {
             return self.reject("消息过短");
         }
@@ -68,6 +82,10 @@ impl<'a> MemoryGate<'a> {
         let pfc = self.prefrontal_evaluate(message, session_context);
         let tmp = self.temporal_evaluate(message);
 
+        // --- 2. 🧠 情绪劫持 (Amygdala Hijack) ---
+        // 如果情绪极度强烈，直接触发“闪光灯记忆”机制，无视其他指标
+        let is_hijacked = amy.score > 0.85;
+
         // 🧠 学习加分：learned keywords boost（在上限内叠加到前额叶）
         let mut learned = LearnedKeywords::load(&self.config.learned_keywords_path);
         let learned_boost: f64 = tokenize(message)
@@ -76,21 +94,49 @@ impl<'a> MemoryGate<'a> {
             .sum::<f64>()
             .min(0.3);
 
-        let decision_score = amy.score * 0.35
-            + hip.score * 0.30
-            + (pfc.score + learned_boost).min(1.0) * 0.20
-            + tmp.score * 0.15;
+        // --- 3. 非线性权重组合 ---
+        let decision_score = if is_hijacked {
+            amy.score // 劫持状态下，分数由情绪主导
+        } else {
+            amy.score * 0.35
+            + hip.score * 0.20
+            + (pfc.score + learned_boost).min(1.0) * 0.30
+            + tmp.score * 0.15
+        };
 
+        // --- 4. 决策逻辑 ---
         let has_mem_intent = ["记住","记一下","帮我记","需要记住","别忘了","务必记住"].iter().any(|w| message.contains(w));
         let has_decision = ["决定","选择","以后","固定","定期","不再","改为","取消","打算"].iter().any(|w| message.contains(w));
+        
         let mut importance = (decision_score * 10.0).clamp(1.0, 10.0) as u8;
+        if is_hijacked {
+            importance = importance.max(8); // 情绪劫持记忆通常很重要
+        }
         if has_mem_intent { importance = importance.max(7); }
         else if has_decision { importance = importance.max(5); }
-        let should_remember = decision_score >= self.config.auto_memory_threshold;
-        let tags = extract_tags(message, &emotion_name);
+        
+        let mut should_remember = decision_score >= self.config.auto_memory_threshold;
+        if is_hijacked { should_remember = true; } // 劫持状态强制记住
+
+        // --- 5. 情境标签提取 ---
+        let mut tags = extract_tags(message, &emotion_name);
+        if is_hijacked { tags.push("闪光灯记忆".into()); }
+        
+        // 自动添加当前会话的高频上下文作为隐含标签 (方案二)
+        if !session_context.is_empty() {
+             let mut context_words = session_context.iter()
+                .flat_map(|s| tokenize(s))
+                .filter(|w| w.len() > 3)
+                .collect::<Vec<_>>();
+             context_words.sort_by_key(|w| w.len());
+             if let Some(ctx_tag) = context_words.last() {
+                 tags.push(format!("ctx:{}", ctx_tag));
+             }
+        }
 
         let mut reasons: Vec<String> = vec![];
-        if amy.score >= 0.5 { reasons.push("杏仁核：强情绪".to_string()); }
+        if is_hijacked { reasons.push("核心情绪劫持".to_string()); }
+        if amy.score >= 0.5 && !is_hijacked { reasons.push("杏仁核：强情绪".to_string()); }
         if hip.score >= 0.5 { reasons.push("海马体：高新奇度".to_string()); }
         if pfc.score >= 0.5 { reasons.push("前额叶：话题相关".to_string()); }
         if tmp.score >= 0.5 { reasons.push("颞叶：社交内容".to_string()); }
@@ -101,8 +147,6 @@ impl<'a> MemoryGate<'a> {
         } else {
             reasons.join(",")
         };
-
-        let decision_score = (decision_score * 10000.0).round() / 10000.0;
 
         let result = MemoryDecision {
             should_remember,

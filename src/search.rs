@@ -1,6 +1,6 @@
 /// search — BM25 检索引擎 + CJK 分词 + 同义词扩展
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::config::HippocampusConfig;
 use crate::engram::Engram;
@@ -66,10 +66,32 @@ impl<'a> BM25Search<'a> {
         let bm25 = BM25Index::build(&engrams);
         let now = now_iso();
 
+        // 🧠 情境感知：从 tokens 或 query 中提取潜在情境特征 (Scheme 2)
+        let context_clues: HashSet<String> = tokens.iter()
+            .filter(|t| t.len() > 3)
+            .cloned()
+            .collect();
+
         let mut results: Vec<SearchResult> = engrams
             .into_iter()
             .filter_map(|engram| {
-                let bm25_score = bm25.score(&tokens, &engram.content);
+                let mut bm25_score = bm25.score(&tokens, &engram.content);
+                
+                // 🧠 情境依赖增强 (Context-Dependent Boost)
+                // 如果 Engram 的 tags 中包含当前上下文线索，给予加分
+                let mut context_boost = 0.0;
+                for tag in &engram.tags {
+                    if tag.starts_with("ctx:") {
+                        let ctx_val = &tag[4..];
+                        if context_clues.contains(ctx_val) {
+                            context_boost += 1.0; // 强力情境匹配
+                        }
+                    }
+                }
+                
+                // 将情境加分合并到 bm25_score
+                bm25_score += context_boost;
+
                 if bm25_score < min_score {
                     return None;
                 }
@@ -116,6 +138,10 @@ impl<'a> BM25Search<'a> {
 
 // --- CJK Tokenizer ---
 
+const STOP_WORDS: &[&str] = &[
+    "的", "了", "在", "是", "我", "你", "他", "她", "它", "们", "这", "那", "之", "与", "和", "或", "而", "且", "但", "也", "就", "又", "到", "自", "从", "由", "于", "着", "把", "给", "等", "被", "让", "向", "往", "过", "得", "吗", "呢", "吧", "啊", "！", "？", "。", "，", "；", "：", "“", "”", "（", "）", "[", "]", "{", "}",
+];
+
 pub fn tokenize(text: &str) -> Vec<String> {
     let mut tokens = vec![];
 
@@ -126,13 +152,19 @@ pub fn tokenize(text: &str) -> Vec<String> {
             word_buf.push(ch);
         } else {
             if !word_buf.is_empty() {
-                tokens.push(word_buf.to_lowercase());
+                let w = word_buf.to_lowercase();
+                if !STOP_WORDS.contains(&w.as_str()) {
+                    tokens.push(w);
+                }
                 word_buf.clear();
             }
         }
     }
     if !word_buf.is_empty() {
-        tokens.push(word_buf.to_lowercase());
+        let w = word_buf.to_lowercase();
+        if !STOP_WORDS.contains(&w.as_str()) {
+            tokens.push(w);
+        }
     }
 
     // CJK segments: extract consecutive CJK runs
@@ -151,8 +183,15 @@ pub fn tokenize(text: &str) -> Vec<String> {
         generate_ngrams(&cjk_buf, &mut tokens);
     }
 
-    // Filter single char and empty
-    tokens.retain(|t| t.len() >= 2);
+    // Filter single char (unless it's a meaningful digit/word) and empty
+    tokens.retain(|t| {
+        if t.len() == 1 {
+            // Allow single digits or meaningful single-char tokens if needed
+            t.chars().next().unwrap().is_ascii_digit()
+        } else {
+            t.len() >= 2
+        }
+    });
     tokens
 }
 
@@ -164,14 +203,20 @@ fn generate_ngrams(segment: &str, tokens: &mut Vec<String>) {
     if n >= 2 {
         for i in 0..=(n - 2) {
             let s: String = chars[i..=i + 1].iter().collect();
-            tokens.push(s);
+            // 如果 2-gram 包含停用词，通常意味着它是虚词组合，降低优先级或过滤
+            // 这里简单处理：只要不是全停用词就保留
+            if !s.chars().all(|c| STOP_WORDS.contains(&c.to_string().as_str())) {
+                tokens.push(s);
+            }
         }
     }
     // 3-grams
     if n >= 3 {
         for i in 0..=(n - 3) {
             let s: String = chars[i..=i + 2].iter().collect();
-            tokens.push(s);
+            if !s.chars().all(|c| STOP_WORDS.contains(&c.to_string().as_str())) {
+                tokens.push(s);
+            }
         }
     }
 }

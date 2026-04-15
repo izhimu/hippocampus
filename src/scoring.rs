@@ -16,11 +16,16 @@ pub fn decay(days_ago: f64, half_life: f64) -> f64 {
     (-days_ago / hl).exp()
 }
 
-/// 综合评分公式（与 Python EngramStore.search 中的 final_score 一致）
-/// final_score = (bm25_score * 0.01 + importance * 0.04 + access_count * 0.05) * decay
+/// 综合评分公式：优先保障相关性 (BM25)，平衡重要性和新鲜度
+/// final_score = (ln(1 + bm25_score) * 0.6 + importance * 0.04 + ln(1 + access_count) * 0.05) * decay
 pub fn final_score(bm25_score: f64, importance: u32, access_count: u32, days_ago: f64, half_life: f64) -> f64 {
     let d = decay(days_ago, half_life);
-    (bm25_score * 0.01 + importance as f64 * 0.04 + access_count as f64 * 0.05) * d
+    // 使用对数平滑 BM25 和 access_count，防止极端值干扰
+    let rel_score = (1.0 + bm25_score).ln() * 0.6;
+    let imp_score = importance as f64 * 0.04; // 1-10 -> 0.04-0.4
+    let freq_score = (1.0 + access_count as f64).ln() * 0.05; 
+    
+    (rel_score + imp_score + freq_score) * d
 }
 
 /// LTP（长期增强）：每 5 次访问，半衰期 ×1.2
