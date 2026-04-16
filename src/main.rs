@@ -2,6 +2,10 @@
 
 use std::io::Read;
 
+// Embed adapter files into binary for global install support
+const OPENCLAW_HOOK_MD: &str = include_str!("../adapters/openclaw/HOOK.md");
+const OPENCLAW_HANDLER_TS: &str = include_str!("../adapters/openclaw/handler.ts");
+
 fn get_home() -> String {
     std::env::var("HIPPOCAMPUS_HOME").unwrap_or_else(|_| {
         std::env::var("HOME").map(|h| format!("{}/.hippocampus", h)).unwrap_or_else(|_| "./.hippocampus".to_string())
@@ -14,6 +18,8 @@ fn print_json<T: serde::Serialize>(val: &T) {
 
 /// 通知 Gateway 发生了更新（实现 CLI 和 Web 同步，跨平台支持）
 fn notify_gateway(payload: &serde_json::Value) {
+    // Skip proxy for localhost connections (avoids http_proxy interference)
+    std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_millis(500)))
         .build();
@@ -358,7 +364,7 @@ fn cmd_stats() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_install(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::io::Write;
 
     let openclaw = args.contains(&"--openclaw".to_string()) || args.contains(&"--all".to_string());
@@ -374,61 +380,81 @@ fn cmd_install(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
     if openclaw {
         let home_dir = std::env::var("HOME").unwrap_or_default();
-        let openclaw_skills = format!("{}/.openclaw/workspace/skills/hippocampus", home_dir);
-        let src_skill = std::env::current_dir().unwrap_or_default().join("adapters/openclaw/SKILL.md");
-
-        // 1. SKILL.md symlink
-        let _ = std::fs::create_dir_all(&openclaw_skills);
-        let link_path = format!("{}/SKILL.md", openclaw_skills);
-        let _ = std::fs::remove_file(&link_path);
-        match std::os::unix::fs::symlink(src_skill.to_str().unwrap_or(""), &link_path) {
-            Ok(_) => installed.push("OpenClaw SKILL.md".to_string()),
-            Err(e) => {
-                if std::fs::copy(&src_skill, &link_path).is_ok() {
-                    installed.push("OpenClaw SKILL.md (copied)".to_string());
-                } else {
-                    failed.push(format!("OpenClaw SKILL.md: {}", e));
-                }
-            }
-        }
-
-        // 2. HIPPOCAMPUS_HOME to .bashrc
-        let bashrc_path = format!("{}/.bashrc", home_dir);
-        let env_line = "export HIPPOCAMPUS_HOME=/home/bot/.openclaw/workspace/cognitive_memory";
-        if let Ok(bashrc) = std::fs::read_to_string(&bashrc_path) {
-            if bashrc.contains("HIPPOCAMPUS_HOME") {
-                skipped.push("OpenClaw HIPPOCAMPUS_HOME (已配置)".to_string());
-            } else if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&bashrc_path) {
-                let _ = writeln!(f, "\n# Hippocampus\n{}", env_line);
-                installed.push("OpenClaw HIPPOCAMPUS_HOME".to_string());
-            }
-        }
-
-        // 3. Configure crons in openclaw.json
+        let cwd = std::env::current_dir().unwrap_or_default();
         let openclaw_json_path = format!("{}/.openclaw/openclaw.json", home_dir);
+
+        // 1. Read workspace path from openclaw.json
+        let default_workspace = format!("{}/.openclaw/workspace", home_dir);
+        let workspace_dir = std::fs::read_to_string(&openclaw_json_path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|c| c.get("agents")
+                .and_then(|a| a.get("defaults"))
+                .and_then(|d| d.get("workspace"))
+                .and_then(|w| w.as_str().map(|s| s.to_string())))
+            .unwrap_or(default_workspace);
+
+        // 2. Write HOOK.md and handler.ts (embedded in binary) to <workspace>/hooks/hippocampus/
+        let target_dir = format!("{}/hooks/hippocampus", workspace_dir);
+        let _ = std::fs::create_dir_all(&target_dir);
+
+        let embedded_files: &[(&str, &str)] = &[
+            ("HOOK.md", OPENCLAW_HOOK_MD),
+            ("handler.ts", OPENCLAW_HANDLER_TS),
+        ];
+        for (file, content) in embedded_files {
+            let dst = Path::new(&target_dir).join(file);
+            match std::fs::write(&dst, content) {
+                Ok(_) => installed.push(format!("OpenClaw hook: {}", file)),
+                Err(e) => failed.push(format!("OpenClaw hook: {} 写入失败: {}", file, e)),
+            }
+        }
+
+        // 3. Set HIPPOCAMPUS_HOME in openclaw.json env.vars
+        let hippo_home = format!("{}/.hippocampus", home_dir);
         if let Ok(config_str) = std::fs::read_to_string(&openclaw_json_path) {
             if let Ok(mut config) = serde_json::from_str::<serde_json::Value>(&config_str) {
-                let has_hippo = config.get("crons").and_then(|c| c.as_array()).map_or(false, |arr| {
-                    arr.iter().any(|c| {
-                        c.get("name").and_then(|n| n.as_str()).map_or(false, |name| {
-                            name.contains("hippocampus") || name.contains("reflect") || name.contains("vacuum")
-                        })
-                    })
-                });
-                let crons = config.get_mut("crons").and_then(|c| c.as_array_mut());
-                if has_hippo {
-                    skipped.push("OpenClaw crons (已配置)".to_string());
-                } else if let Some(crons_arr) = crons {
-                    crons_arr.push(serde_json::json!({ "name": "Hippocampus_Reflect_2230", "schedule": "30 22 * * *", "enabled": true, "task": "exec hippocampus reflect --days 3" }));
-                    crons_arr.push(serde_json::json!({ "name": "Hippocampus_Vacuum_Monthly", "schedule": "0 3 1 * *", "enabled": true, "task": "exec hippocampus vacuum" }));
-                    installed.push("OpenClaw crons (reflect + vacuum)".to_string());
+                let already_set = config.get("env")
+                    .and_then(|e| e.get("vars"))
+                    .and_then(|v| v.get("HIPPOCAMPUS_HOME"))
+                    .is_some();
+                if already_set {
+                    skipped.push("OpenClaw HIPPOCAMPUS_HOME env (已配置)".to_string());
                 } else {
-                    failed.push("OpenClaw crons: crons 字段不存在".to_string());
+                    // Ensure env.vars object exists
+                    if config.get("env").is_none() {
+                        config["env"] = serde_json::json!({});
+                    }
+                    if config.get("env").and_then(|e| e.get("vars")).is_none() {
+                        config["env"]["vars"] = serde_json::json!({});
+                    }
+                    if let Some(vars) = config.get_mut("env")
+                        .and_then(|e| e.get_mut("vars"))
+                        .and_then(|v| v.as_object_mut())
+                    {
+                        vars.insert("HIPPOCAMPUS_HOME".to_string(), serde_json::json!(hippo_home));
+                        if let Ok(pretty) = serde_json::to_string_pretty(&config) {
+                            if std::fs::write(&openclaw_json_path, pretty).is_ok() {
+                                installed.push("OpenClaw HIPPOCAMPUS_HOME env".to_string());
+                            } else {
+                                failed.push("OpenClaw HIPPOCAMPUS_HOME: 写入失败".to_string());
+                            }
+                        }
+                    }
                 }
-                // write back
-                if let Ok(pretty) = serde_json::to_string_pretty(&config) {
-                    let _ = std::fs::write(&openclaw_json_path, pretty);
-                }
+            }
+        }
+
+        // 4. Try to enable hook via openclaw CLI
+        match std::process::Command::new("openclaw")
+            .args(&["hooks", "enable", "hippocampus"])
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                installed.push("OpenClaw hook enabled".to_string());
+            }
+            _ => {
+                skipped.push("OpenClaw hook enable (请手动执行 openclaw hooks enable hippocampus)".to_string());
             }
         }
     }
@@ -871,13 +897,17 @@ fn cmd_hook(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     
     // 2. 识别适配器类型
     let is_claude = args.contains(&"--claude".to_string());
-    
+    let is_openclaw = args.contains(&"--openclaw".to_string());
+
     // 3. 提取通用字段 (根据适配器映射)
+    // OpenClaw summarize 需要构建较长生命周期的 summary 字符串
+    let mut openclaw_summary = String::new();
+
     let (event_prompt, event_action, event_summary, session_id) = if is_claude {
         let prompt = input.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
         let last_msg = input.get("lastUserMessage").and_then(|v| v.as_str()).unwrap_or("");
         let sid = input.get("session_id").and_then(|v| v.as_str());
-        
+
         let action_msg = if let Some(tool) = input.get("toolName").and_then(|v| v.as_str()) {
             let t_in = input.get("toolInput").map(|v| v.to_string()).unwrap_or_default();
             let t_out = input.get("toolOutput").map(|v| v.to_string()).unwrap_or_default();
@@ -885,8 +915,38 @@ fn cmd_hook(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         } else {
             None
         };
-        
+
         (Some(prompt), action_msg, Some(last_msg), sid)
+    } else if is_openclaw {
+        // OpenClaw 适配器：从 stdin JSON 提取 sessionKey 和 context 字段
+        let session_key = input.get("sessionKey").and_then(|v| v.as_str());
+        let ctx = input.get("context");
+        let ctx_content = ctx.and_then(|c| c.get("content")).and_then(|v| v.as_str());
+        let ctx_body = ctx.and_then(|c| c.get("bodyForAgent")).and_then(|v| v.as_str());
+
+        // summarize 模式：从 messages 数组拼接摘要
+        if hook_type == "summarize" {
+            if let Some(messages) = input.get("messages").and_then(|v| v.as_array()) {
+                openclaw_summary = messages.iter()
+                    .filter_map(|m| m.get("content").and_then(|c| c.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
+        }
+
+        let summary_ref = if openclaw_summary.is_empty() { None } else { Some(openclaw_summary.as_str()) };
+
+        match hook_type {
+            // message:received → auto 模式 (recall + gate)
+            "auto" => (ctx_content, None, None, session_key),
+            // message:preprocessed / message:sent → record 模式 (gate 评估)
+            "record" => (None, ctx_body.or(ctx_content).map(|s| s.to_string()), None, session_key),
+            // session:compact:before → summarize 模式
+            "summarize" => (None, None, summary_ref, session_key),
+            // command:new → reflect 模式
+            "reflect" => (None, None, None, session_key),
+            _ => (None, None, None, session_key)
+        }
     } else {
         // 非 Claude 模式下，尝试直接从 JSON 根部读取标准字段
         (
@@ -1014,8 +1074,6 @@ fn cmd_hook(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             if let Some(summary) = event_summary {
                 if !summary.is_empty() {
                     if let Ok(d) = hippo.auto_remember(summary, "dialogue", session_id, false) {
-                        last_decision = Some(d);
-                        
                         if is_claude {
                             print_json(&serde_json::json!({
                                 "continue": true,
@@ -1024,7 +1082,12 @@ fn cmd_hook(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                                     "hookEventName": "Stop"
                                 }
                             }));
+                        } else if is_openclaw {
+                            print_json(&serde_json::json!({
+                                "context": format!("🧠 Hippocampus: 对话已摘要并归档 (重要性: {:.2})", d.decision_score)
+                            }));
                         }
+                        last_decision = Some(d);
                     }
                 }
             }
