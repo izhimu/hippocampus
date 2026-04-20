@@ -439,7 +439,7 @@ hippocampus gateway start
 
 ## 📊 LongMemEval 基准测试
 
-内置 `bench-longmemeval` 基准工具，基于 [LongMemEval](https://arxiv.org/abs/2410.10890) 数据集评估记忆召回能力。
+内置 `bench-longmemeval` 基准工具，基于 `LongMemEval` 数据集评估记忆召回能力。
 
 ```bash
 cd bench-longmemeval && cargo build --release
