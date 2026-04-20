@@ -208,10 +208,5 @@ impl LearnedKeywords {
 }
 
 fn now_iso() -> String {
-    // Simple ISO-8601 approximation
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    format!("2026-04-14T{:02}:{:02}:00+08:00", (now / 3600) % 24, (now / 60) % 60)
+    crate::engram::chrono_now_iso()
 }

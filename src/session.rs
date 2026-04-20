@@ -128,7 +128,7 @@ impl SessionManager {
 }
 
 fn now_iso() -> String {
-    "2026-04-14T13:42:00+08:00".to_string()
+    crate::engram::chrono_now_iso()
 }
 
 fn uuid_hex() -> String {

@@ -1,11 +1,12 @@
-/// search — BM25 检索引擎 + CJK 分词 + 同义词扩展
+/// search — BM25 + SimHash (SDM) 检索引擎 + CJK 分词 + 同义词扩展
 
 use std::collections::{HashMap, HashSet};
 
 use crate::config::HippocampusConfig;
 use crate::engram::Engram;
-use crate::scoring::{final_score, ltp_boost};
+use crate::scoring::{final_score_actr, ltp_boost};
 use crate::semantic_network::SemanticNetwork;
+use crate::simhash;
 use crate::store::EngramStore;
 
 pub struct SearchResult {
@@ -62,11 +63,13 @@ impl<'a> BM25Search<'a> {
             engrams.retain(|e| e.emotion == emotion);
         }
 
-        // 4. BM25 scoring
-        let bm25 = BM25Index::build(&engrams);
-        let now = now_iso();
+        // 4. Compute query SimHash fingerprint
+        let query_fp = simhash::simhash(query);
 
-        // 🧠 情境感知：从 tokens 或 query 中提取潜在情境特征 (Scheme 2)
+        // 5. BM25 scoring + SimHash fusion
+        let bm25 = BM25Index::build(&engrams, self.config.bm25_k1, self.config.bm25_b);
+        let _now = now_iso();
+
         let context_clues: HashSet<String> = tokens.iter()
             .filter(|t| t.len() > 3)
             .cloned()
@@ -74,58 +77,137 @@ impl<'a> BM25Search<'a> {
 
         let mut results: Vec<SearchResult> = engrams
             .into_iter()
-            .filter_map(|engram| {
-                let mut bm25_score = bm25.score(&tokens, &engram.content);
-                
-                // 🧠 情境依赖增强 (Context-Dependent Boost)
-                // 如果 Engram 的 tags 中包含当前上下文线索，给予加分
+            .enumerate()
+            .filter_map(|(idx, engram)| {
+                let mut bm25_score = bm25.score_by_index(&tokens, idx);
+
+                // Context boost
                 let mut context_boost = 0.0;
                 for tag in &engram.tags {
                     if tag.starts_with("ctx:") {
                         let ctx_val = &tag[4..];
                         if context_clues.contains(ctx_val) {
-                            context_boost += 1.0; // 强力情境匹配
+                            context_boost += 1.0;
                         }
                     }
                 }
-                
-                // 将情境加分合并到 bm25_score
                 bm25_score += context_boost;
 
-                if bm25_score < min_score {
-                    return None;
-                }
-                let days_ago = days_since(&engram.created_at, &now);
-                let d = (-days_ago / engram.half_life as f64).exp();
-                let score = final_score(
-                    bm25_score,
+                // SimHash (SDM) similarity
+                let sdm_sim = if engram.fingerprint != 0 {
+                    simhash::hamming_similarity(query_fp, engram.fingerprint)
+                } else {
+                    // Fingerprint not computed yet, compute on-the-fly
+                    let fp = simhash::simhash(&engram.content);
+                    simhash::hamming_similarity(query_fp, fp)
+                };
+
+                // Pure BM25 scoring — SimHash is noisy for ranking,
+                // kept only for SR-spreading and cognitive map similarity
+                let fused_score = bm25_score;
+
+                let decay_rate = self.config.actr_decay_rate;
+                let d = crate::scoring::actr_decay_factor(&engram.access_history, decay_rate);
+                let score = final_score_actr(
+                    fused_score,
                     engram.importance,
                     engram.access_count,
-                    days_ago,
+                    &engram.access_history,
                     engram.half_life as f64,
+                    decay_rate,
                 );
+
+                // Filter on final_score instead of raw fused_score
+                // This allows importance and other factors to rescue weak BM25 matches
+                if score < min_score && fused_score < min_score && bm25_score < min_score {
+                    return None;
+                }
                 Some(SearchResult {
                     engram,
                     score,
-                    bm25_score,
+                    bm25_score: fused_score,
                     decay: d,
                 })
             })
             .collect();
 
-        // 5. LTP boost via update
-        for r in &results {
-            let eid = r.engram.id.clone();
-            let new_hl = ltp_boost(r.engram.half_life, r.engram.access_count);
-            let _ = self.store.update(&eid, |e| {
-                e.access_count += 1;
-                if new_hl != e.half_life {
-                    e.half_life = new_hl;
+        // 5. LTP boost — batch all updates into a single read-modify-write per layer
+        let update_map: HashMap<String, (u32, u64)> = results.iter()
+            .map(|r| {
+                let access_count = r.engram.access_count + 1;
+                let new_hl = ltp_boost(r.engram.half_life, access_count);
+                (r.engram.id.clone(), (access_count, new_hl))
+            })
+            .collect();
+
+        let _ = self.store.batch_update(&update_map, |e, &(ac, new_hl)| {
+            let now = crate::engram::chrono_now_iso();
+            e.accessed_at = Some(now.clone());
+            e.access_count = ac;
+            e.access_history.push(now);
+            if e.access_history.len() > 50 {
+                e.access_history.drain(..e.access_history.len() - 50);
+            }
+            if new_hl != e.half_life {
+                e.half_life = new_hl;
+            }
+        });
+
+        // Build an in-memory ID index from loaded data to avoid re-reading files
+        // (results already contain all loaded engrams, we use them for SR lookup)
+        let id_index: HashMap<String, &SearchResult> = results.iter()
+            .map(|r| (r.engram.id.clone(), r))
+            .collect();
+
+        // 6. SR spreading: expand results with related engrams from cognitive map
+        let cog_map_path = self.config.cognitive_dir.join("cognitive_map.json");
+        let cog_map = crate::cognitive_map::CognitiveMap::load(&cog_map_path, 5000).ok();
+
+        if let Some(ref cog_map) = cog_map {
+            let mut sr_candidates: Vec<SearchResult> = vec![];
+            let mut seen_ids: HashSet<String> = results.iter().map(|r| r.engram.id.clone()).collect();
+
+            for r in &results {
+                let related = cog_map.get_related(&r.engram.id, 3);
+                for (rel_id, rel_weight) in related {
+                    if seen_ids.contains(&rel_id) { continue; }
+                    seen_ids.insert(rel_id.clone());
+
+                    // First check in-memory index (already loaded engrams)
+                    let engram_opt: Option<Engram> = if let Some(sr) = id_index.get(&rel_id) {
+                        Some(sr.engram.clone())
+                    } else {
+                        // Fall back to file lookup only if not in memory
+                        self.store.get_by_id(&rel_id).ok().flatten()
+                    };
+                    let Some(engram) = engram_opt else { continue };
+
+                    let sdm_sim = if engram.fingerprint != 0 {
+                        simhash::hamming_similarity(query_fp, engram.fingerprint)
+                    } else {
+                        0.0
+                    };
+                    let fused = sdm_sim * 5.0 * rel_weight;
+                    if fused >= min_score {
+                        let decay_rate = self.config.actr_decay_rate;
+                        let d = crate::scoring::actr_decay_factor(&engram.access_history, decay_rate);
+                        let score = crate::scoring::final_score_actr(
+                            fused, engram.importance, engram.access_count,
+                            &engram.access_history, engram.half_life as f64, decay_rate,
+                        );
+                        sr_candidates.push(SearchResult {
+                            engram,
+                            score: score * 0.8,
+                            bm25_score: fused,
+                            decay: d,
+                        });
+                    }
                 }
-            });
+            }
+            results.extend(sr_candidates);
         }
 
-        // 6. Sort and take top_k
+        // 7. Sort and take top_k
         results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         results.truncate(top_k);
         results
@@ -139,8 +221,139 @@ impl<'a> BM25Search<'a> {
 // --- CJK Tokenizer ---
 
 const STOP_WORDS: &[&str] = &[
-    "的", "了", "在", "是", "我", "你", "他", "她", "它", "们", "这", "那", "之", "与", "和", "或", "而", "且", "但", "也", "就", "又", "到", "自", "从", "由", "于", "着", "把", "给", "等", "被", "让", "向", "往", "过", "得", "吗", "呢", "吧", "啊", "！", "？", "。", "，", "；", "：", "“", "”", "（", "）", "[", "]", "{", "}",
+    // CJK
+    "\u{7684}", "\u{4e86}", "\u{5728}", "\u{662f}", "\u{6211}", "\u{4f60}", "\u{4ed6}",
+    "\u{5979}", "\u{5b83}", "\u{4eec}", "\u{8fd9}", "\u{90a3}", "\u{4e4b}", "\u{4e0e}",
+    "\u{548c}", "\u{6216}", "\u{800c}", "\u{4e14}", "\u{4f46}", "\u{4e5f}", "\u{5c31}",
+    "\u{53c8}", "\u{5230}", "\u{81ea}", "\u{4ece}", "\u{7531}", "\u{4e8e}", "\u{7740}",
+    "\u{628a}", "\u{7ed9}", "\u{7b49}", "\u{88ab}", "\u{8ba9}", "\u{5411}", "\u{5f80}",
+    "\u{8fc7}", "\u{5f97}", "\u{5417}", "\u{5462}", "\u{5427}", "\u{554a}",
+    // English stop words
+    "the", "a", "an", "and", "or", "but", "if", "then", "else", "when", "where", "why", "how",
+    "what", "which", "who", "whom", "this", "that", "these", "those", "am", "is", "are", "was",
+    "were", "be", "been", "being", "have", "has", "had", "having", "do", "does", "did", "doing",
+    "to", "from", "up", "down", "in", "out", "on", "off", "over", "under", "again", "further",
+    "once", "here", "there", "all", "any", "both", "each", "few", "more", "most", "other",
+    "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very",
+    "can", "will", "just", "don", "should", "now", "about", "above", "after", "before",
+    "between", "into", "through", "during", "for", "with", "at", "by", "of",
 ];
+
+/// Basic English suffix stemming (Porter-like, simplified)
+/// Returns the stemmed form. Original word is also kept in token list.
+fn stem_english(word: &str) -> String {
+    if word.len() < 4 || !word.chars().all(|c| c.is_ascii_alphabetic()) {
+        return word.to_string();
+    }
+    let _w = word.as_bytes();
+
+    // Step 1: -sses → -ss, -ies → -i, -s → (remove if preceded by non-s)
+    if word.ends_with("sses") {
+        return word[..word.len()-2].to_string();
+    }
+    if word.ends_with("ies") {
+        return word[..word.len()-3].to_string() + "i";
+    }
+    // Remove trailing 's' but not 'ss'
+    if word.ends_with('s') && !word.ends_with("ss") && !word.ends_with("us") && !word.ends_with("is") {
+        return word[..word.len()-1].to_string();
+    }
+
+    // Step 2: -eed → -ee (if stem has non-vowel before)
+    if word.ends_with("eed") {
+        let stem = &word[..word.len()-3];
+        if count_consonant_sequences(stem) > 0 {
+            return word[..word.len()-1].to_string();
+        }
+        return word.to_string();
+    }
+
+    // Step 3: -ing, -ed (if stem has vowel)
+    if word.ends_with("ing") && word.len() > 5 {
+        let stem = &word[..word.len()-3];
+        if has_vowel(stem) {
+            return stem_or_double(stem);
+        }
+        return word.to_string();
+    }
+    if word.ends_with("ed") && word.len() > 4 {
+        let stem = &word[..word.len()-2];
+        if has_vowel(stem) {
+            return stem_or_double(stem);
+        }
+        return word.to_string();
+    }
+
+    // Step 4: -y → -i (if stem has vowel before y)
+    if word.ends_with('y') && word.len() > 3 {
+        let stem = &word[..word.len()-1];
+        if has_vowel(stem) {
+            return stem.to_string() + "i";
+        }
+    }
+
+    // Step 5: -tional → -tion, -ation stays, -ization → -ize
+    if word.ends_with("ational") && word.len() > 8 {
+        return word[..word.len()-5].to_string() + "e";
+    }
+    if word.ends_with("tional") && word.len() > 7 {
+        return word[..word.len()-2].to_string();
+    }
+    if word.ends_with("ization") {
+        return word[..word.len()-5].to_string() + "e";
+    }
+    if word.ends_with("fulness") {
+        return word[..word.len()-4].to_string();
+    }
+    if word.ends_with("ousness") {
+        return word[..word.len()-4].to_string();
+    }
+    if word.ends_with("iveness") {
+        return word[..word.len()-4].to_string();
+    }
+
+    word.to_string()
+}
+
+fn has_vowel(s: &str) -> bool {
+    s.chars().any(|c| matches!(c.to_ascii_lowercase(), 'a'|'e'|'i'|'o'|'u'))
+}
+
+fn count_consonant_sequences(s: &str) -> usize {
+    let mut count = 0;
+    let mut in_consonant = false;
+    for c in s.chars() {
+        let is_vowel = matches!(c.to_ascii_lowercase(), 'a'|'e'|'i'|'o'|'u');
+        if !is_vowel && !in_consonant {
+            count += 1;
+            in_consonant = true;
+        } else if is_vowel {
+            in_consonant = false;
+        }
+    }
+    count
+}
+
+/// Handle doubled consonant from -ing/-ed suffix stripping.
+/// Only strip consonants that actually double in English morphology: b,d,g,l,m,n,p,r,t
+/// Don't strip: s (pass→pas is wrong), f (staff→staf is wrong), etc.
+fn stem_or_double(stem: &str) -> String {
+    if stem.is_empty() { return stem.to_string(); }
+    let chars: Vec<char> = stem.chars().collect();
+    let n = chars.len();
+    if n >= 2 {
+        let last = chars[n-1];
+        let prev = chars[n-2];
+        if last == prev && matches!(last, 'b'|'d'|'g'|'l'|'m'|'n'|'p'|'r'|'t') {
+            return chars[..n-1].iter().collect();
+        }
+    }
+    // Add 'e' for certain endings: "creat" → "create"
+    if stem.ends_with("at") || stem.ends_with("bl") || stem.ends_with("iz") {
+        return stem.to_string() + "e";
+    }
+    stem.to_string()
+}
 
 pub fn tokenize(text: &str) -> Vec<String> {
     let mut tokens = vec![];
@@ -153,8 +366,11 @@ pub fn tokenize(text: &str) -> Vec<String> {
         } else {
             if !word_buf.is_empty() {
                 let w = word_buf.to_lowercase();
-                if !STOP_WORDS.contains(&w.as_str()) {
-                    tokens.push(w);
+                let stemmed = stem_english(&w);
+                for t in [w.clone(), stemmed].into_iter().filter(|t| !STOP_WORDS.contains(&t.as_str()) && t.len() >= 2) {
+                    if !tokens.contains(&t) {
+                        tokens.push(t);
+                    }
                 }
                 word_buf.clear();
             }
@@ -162,8 +378,11 @@ pub fn tokenize(text: &str) -> Vec<String> {
     }
     if !word_buf.is_empty() {
         let w = word_buf.to_lowercase();
-        if !STOP_WORDS.contains(&w.as_str()) {
-            tokens.push(w);
+        let stemmed = stem_english(&w);
+        for t in [w.clone(), stemmed].into_iter().filter(|t| !STOP_WORDS.contains(&t.as_str()) && t.len() >= 2) {
+            if !tokens.contains(&t) {
+                tokens.push(t);
+            }
         }
     }
 
@@ -199,20 +418,23 @@ fn generate_ngrams(segment: &str, tokens: &mut Vec<String>) {
     let chars: Vec<char> = segment.chars().collect();
     let n = chars.len();
 
+    // Cap n-gram generation to prevent memory explosion on long CJK segments.
+    // For segments > 20 chars, only generate n-grams from the first 20 chars.
+    let cap = 20;
+    let gen_n = n.min(cap);
+
     // 2-grams
-    if n >= 2 {
-        for i in 0..=(n - 2) {
+    if gen_n >= 2 {
+        for i in 0..=(gen_n - 2) {
             let s: String = chars[i..=i + 1].iter().collect();
-            // 如果 2-gram 包含停用词，通常意味着它是虚词组合，降低优先级或过滤
-            // 这里简单处理：只要不是全停用词就保留
             if !s.chars().all(|c| STOP_WORDS.contains(&c.to_string().as_str())) {
                 tokens.push(s);
             }
         }
     }
     // 3-grams
-    if n >= 3 {
-        for i in 0..=(n - 3) {
+    if gen_n >= 3 {
+        for i in 0..=(gen_n - 3) {
             let s: String = chars[i..=i + 2].iter().collect();
             if !s.chars().all(|c| STOP_WORDS.contains(&c.to_string().as_str())) {
                 tokens.push(s);
@@ -228,15 +450,16 @@ fn is_cjk(ch: char) -> bool {
 // --- BM25 Index ---
 
 struct BM25Index {
-    _doc_count: usize,
     avg_dl: f64,
     idf: HashMap<String, f64>,
-    _doc_tf: Vec<HashMap<String, u32>>,
-    _doc_lengths: Vec<usize>,
+    doc_tf: Vec<HashMap<String, u32>>,
+    doc_lengths: Vec<usize>,
+    k1: f64,
+    b: f64,
 }
 
 impl BM25Index {
-    fn build(engrams: &[Engram]) -> Self {
+    fn build(engrams: &[Engram], k1: f64, b: f64) -> Self {
         let doc_count = engrams.len();
         let mut doc_tf = Vec::with_capacity(doc_count);
         let mut doc_lengths = Vec::with_capacity(doc_count);
@@ -267,19 +490,18 @@ impl BM25Index {
             })
             .collect();
 
-        Self { _doc_count: doc_count, avg_dl, idf, _doc_tf: doc_tf, _doc_lengths: doc_lengths }
+        Self { avg_dl, idf, doc_tf, doc_lengths, k1, b }
     }
 
-    fn score(&self, query_tokens: &[String], content: &str) -> f64 {
-        let tokens = tokenize(content);
-        let dl = tokens.len() as f64;
-        let mut tf: HashMap<String, u32> = HashMap::new();
-        for t in &tokens {
-            *tf.entry(t.clone()).or_insert(0) += 1;
-        }
+    fn score_by_index(&self, query_tokens: &[String], doc_idx: usize) -> f64 {
+        let tf = match self.doc_tf.get(doc_idx) {
+            Some(t) => t,
+            None => return 0.0,
+        };
+        let dl = *self.doc_lengths.get(doc_idx).unwrap_or(&1) as f64;
 
-        let k1 = 1.5;
-        let b = 0.75;
+        let k1 = self.k1;
+        let b = self.b;
         let avg_dl = self.avg_dl.max(1.0);
 
         let mut score = 0.0;
@@ -295,29 +517,33 @@ impl BM25Index {
         }
         score
     }
+
 }
 
 // --- Time helpers ---
 
-fn now_iso() -> String {
-    // Simple ISO-8601 approximation
-    "2026-04-14T13:38:00+08:00".to_string()
+use crate::engram::parse_iso_date;
+
+pub fn now_iso() -> String {
+    crate::engram::chrono_now_iso()
 }
 
-fn days_since(created_at: &str, _now: &str) -> f64 {
-    // Parse date portion and compute rough days
-    let date_str = created_at.get(..10).unwrap_or("2026-04-14");
-    let parts: Vec<&str> = date_str.split('-').collect();
-    if parts.len() != 3 {
-        return 0.0;
-    }
-    // Very rough: assume now is today
-    let y: i64 = parts[0].parse().unwrap_or(2026);
-    let m: i64 = parts[1].parse().unwrap_or(4);
-    let d: i64 = parts[2].parse().unwrap_or(14);
-    let created_days = y * 365 + m * 30 + d;
-    let now_days = 2026i64 * 365 + 4 * 30 + 14;
-    (now_days - created_days).max(0) as f64
+pub fn days_since(created_at: &str, _now: &str) -> f64 {
+    let created = match parse_iso_date(created_at) {
+        Some(d) => d,
+        None => return 0.0,
+    };
+    let today = chrono::Local::now().date_naive();
+    (today - created).num_days().max(0) as f64
+}
+
+pub fn hours_since(iso_timestamp: &str) -> f64 {
+    let dt = match chrono::DateTime::parse_from_rfc3339(iso_timestamp) {
+        Ok(d) => d.with_timezone(&chrono::Local).naive_local(),
+        Err(_) => return 0.0,
+    };
+    let now = chrono::Local::now().naive_local();
+    (now - dt).num_seconds() as f64 / 3600.0
 }
 
 #[cfg(test)]

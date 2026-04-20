@@ -1,4 +1,6 @@
 pub mod config;
+pub mod cognitive_map;
+pub mod conflict;
 pub mod dedup;
 pub mod emotion;
 pub mod engram;
@@ -10,6 +12,7 @@ pub mod scoring;
 pub mod search;
 pub mod semantic_network;
 pub mod session;
+pub mod simhash;
 pub mod store;
 pub mod reflect;
 

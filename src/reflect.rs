@@ -6,6 +6,9 @@
 /// 4. vacuum（L1→L2→L3 归档）
 
 use crate::config::HippocampusConfig;
+use crate::cognitive_map::CognitiveMap;
+use crate::conflict::ConflictResolver;
+use crate::engram::Engram;
 use crate::reconsolidation::Reconsolidation;
 use crate::semantic_network::SemanticNetwork;
 use crate::store::EngramStore;
@@ -37,6 +40,8 @@ pub struct ReflectResult {
     pub reconsolidated: usize,
     pub vacuum: VacuumResult,
     pub semanticized_count: usize,
+    pub cognitive_map_nodes: usize,
+    pub conflicts: crate::conflict::ConflictReport,
 }
 
 #[derive(serde::Serialize)]
@@ -80,13 +85,17 @@ impl Reflector {
         let mut recon = Reconsolidation::new(EngramStore::new(self.config.clone()).unwrap());
         let (consolidated, _updated) = recon.batch_consolidate(days);
 
-        // 4. vacuum
+        // 4. SleepGate conflict resolution (before vacuum)
+        let resolver = ConflictResolver::new(8);
+        let conflicts = resolver.resolve(&self.store);
+
+        // 5. vacuum
         let vacuum = self.vacuum();
 
-        // 5. 🧠 语义化抽象 (Scheme 4 - 预留)
+        // 6. 语义化抽象
         let semanticized_count = self.semanticize(&PlaceholderSemanticizer);
 
-        // 6. 🧠 学习关键词：从所有印迹中批量学习
+        // 8. 学习关键词
         let mut kw = crate::learned_keywords::LearnedKeywords::load(&self.config.learned_keywords_path);
         let all_for_learn = self.store.read_all().unwrap_or_default();
         for e in &all_for_learn {
@@ -95,12 +104,35 @@ impl Reflector {
         kw.refine();
         let _ = kw.save(&self.config.learned_keywords_path);
 
+        // 9. 认知地图：从同一 session 的连续 engram 学习 SR 关系
+        let cog_map_path = self.config.cognitive_dir.join("cognitive_map.json");
+        let mut cog_map = CognitiveMap::load(&cog_map_path, 5000).unwrap_or_else(|_| CognitiveMap::new(5000));
+        let mut session_engrams: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for e in &all_for_learn {
+            if let Some(ref sid) = e.session_id {
+                session_engrams.entry(sid.clone()).or_default().push(e.id.clone());
+            }
+        }
+        for (_sid, ids) in &session_engrams {
+            for window in ids.windows(2) {
+                cog_map.td_update(&window[0], &window[1]);
+            }
+        }
+        cog_map.prune(0.01);
+        let _ = cog_map.save(&cog_map_path);
+
+        // 10. 生成式回放：随机游走巩固记忆链路
+        self.generative_replay(&mut cog_map, &all_for_learn);
+        let _ = cog_map.save(&cog_map_path);
+
         ReflectResult {
             semantic_network_learned: learned,
             pruned,
             reconsolidated: consolidated,
             vacuum,
             semanticized_count,
+            cognitive_map_nodes: cog_map.len(),
+            conflicts,
         }
     }
 
@@ -132,6 +164,47 @@ impl Reflector {
             }
         }
         count
+    }
+
+    /// 生成式回放：从高激活节点出发，随机游走巩固 SR 链路
+    fn generative_replay(&self, cog_map: &mut CognitiveMap, engrams: &[Engram]) {
+        if cog_map.is_empty() || engrams.is_empty() {
+            return;
+        }
+
+        // Find top-N engrams by ACT-R activation as starting points
+        let decay_rate = self.config.actr_decay_rate;
+        let mut scored: Vec<(String, f64)> = engrams.iter()
+            .filter_map(|e| {
+                if cog_map.get_related(&e.id, 1).is_empty() {
+                    return None;
+                }
+                let activation = crate::scoring::actr_decay_factor(&e.access_history, decay_rate);
+                Some((e.id.clone(), activation))
+            })
+            .collect();
+
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let start_nodes: Vec<&str> = scored.iter().take(10).map(|(id, _): &(_, f64)| id.as_str()).collect();
+
+        if start_nodes.is_empty() {
+            return;
+        }
+
+        let consolidation_rate = 0.05;
+        let iterations = 100;
+
+        for _ in 0..iterations {
+            // Pick a random start node
+            let start_idx = (simple_random_usize()) % start_nodes.len();
+            let start = start_nodes[start_idx];
+
+            let path = cog_map.random_walk(start, 5);
+            // Hebbian consolidation along the path
+            for window in path.windows(2) {
+                cog_map.consolidate_edge(window[0].as_str(), window[1].as_str(), consolidation_rate);
+            }
+        }
     }
 
     /// Vacuum 整理
@@ -208,15 +281,14 @@ fn is_older_than_days(created_at: &str, days: i64) -> bool {
 }
 
 fn parse_days_ago(created_at: &str) -> i64 {
-    let date_str = created_at.get(..10).unwrap_or("2026-04-14");
-    let parts: Vec<&str> = date_str.split('-').collect();
-    if parts.len() != 3 {
-        return 0;
-    }
-    let y: i64 = parts[0].parse().unwrap_or(2026);
-    let m: i64 = parts[1].parse().unwrap_or(4);
-    let d: i64 = parts[2].parse().unwrap_or(14);
-    let now_days = 2026i64 * 365 + 4 * 30 + 14;
-    let created_days = y * 365 + m * 30 + d;
-    (now_days - created_days).max(0)
+    crate::search::days_since(created_at, "") as i64
+}
+
+fn simple_random_usize() -> usize {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    (ns as usize).wrapping_mul(0x2545F4914F6CDD1D) >> 32
 }

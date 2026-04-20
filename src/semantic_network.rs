@@ -201,6 +201,13 @@ fn is_stop_word(word: &str) -> bool {
         "于","及","其","又","并","或","还","将","只","因","则","以","至","该","些","么","啊",
         "吧","呢","吗","哦","嗯","哈","嘛","这个","那个","一个","什么","怎么","没有","不是",
         "我们","他们","如果","但是","因为","所以","或者","虽然",
+        "the","a","an","and","or","but","if","then","else","when","where","why","how","what",
+        "which","who","whom","this","that","these","those","am","is","are","was","were","be",
+        "been","being","have","has","had","having","do","does","did","doing","to","from","up",
+        "down","in","out","on","off","over","under","again","further","then","once","here",
+        "there","all","any","both","each","few","more","most","other","some","such","no",
+        "nor","not","only","own","same","so","than","too","very","s","t","can","will","just",
+        "don","should","now",
     ];
-    STOPS.contains(&word)
+    STOPS.contains(&word.to_lowercase().as_str())
 }

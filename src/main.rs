@@ -364,7 +364,7 @@ fn cmd_stats() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_install(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::io::Write;
 
     let openclaw = args.contains(&"--openclaw".to_string()) || args.contains(&"--all".to_string());
@@ -380,7 +380,7 @@ fn cmd_install(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
     if openclaw {
         let home_dir = std::env::var("HOME").unwrap_or_default();
-        let cwd = std::env::current_dir().unwrap_or_default();
+        let _cwd = std::env::current_dir().unwrap_or_default();
         let openclaw_json_path = format!("{}/.openclaw/openclaw.json", home_dir);
 
         // 1. Read workspace path from openclaw.json

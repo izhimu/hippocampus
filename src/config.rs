@@ -45,6 +45,14 @@ pub struct HippocampusConfig {
     pub auto_memory_enabled: bool,
     pub auto_memory_threshold: f64,
     pub auto_memory_blacklist: Vec<String>,
+
+    // SimHash 配置
+    pub simhash_bm25_weight: f64,
+    pub simhash_sdm_weight: f64,
+
+    // ACT-R 配置
+    pub actr_decay_rate: f64,
+    pub actr_max_access_history: usize,
 }
 
 impl Default for HippocampusConfig {
@@ -99,6 +107,10 @@ impl HippocampusConfig {
             auto_memory_enabled: true,
             auto_memory_threshold: 0.3,
             auto_memory_blacklist: vec!["NO_REPLY".into(), "HEARTBEAT_OK".into(), "收到".into(), "好的".into()],
+            simhash_bm25_weight: 0.6,
+            simhash_sdm_weight: 0.4,
+            actr_decay_rate: 0.5,
+            actr_max_access_history: 50,
         };
 
         // 加载配置文件覆盖

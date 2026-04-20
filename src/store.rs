@@ -4,6 +4,8 @@ use std::io::{self, BufRead, Write};
 use crate::config::HippocampusConfig;
 use crate::engram::Engram;
 
+// HashMap still used by StoreStats
+
 /// JSONL 分层存储层
 pub struct EngramStore {
     config: HippocampusConfig,
@@ -59,11 +61,10 @@ impl EngramStore {
     /// 读取所有 layer（L1+L2+L3），去重
     pub fn read_all(&self) -> io::Result<Vec<Engram>> {
         let mut result = vec![];
-        let mut seen = HashMap::new();
+        let mut seen = std::collections::HashSet::new();
         for layer in &["L1", "L2", "L3"] {
             for e in self.read_layer(layer)? {
-                if seen.insert(e.id.clone(), result.len()).is_none() {
-                    seen.insert(e.id.clone(), result.len());
+                if seen.insert(e.id.clone()) {
                     result.push(e);
                 }
             }
@@ -152,6 +153,29 @@ impl EngramStore {
         }
 
         Ok(true)
+    }
+
+    /// Batch update multiple engrams with a single read-modify-write per layer
+    pub fn batch_update<F, V>(&self, updates: &HashMap<String, V>, mutator: F) -> io::Result<()>
+    where
+        F: Fn(&mut Engram, &V),
+    {
+        for layer in &["L1", "L2", "L3"] {
+            let path = self.config.layer_path(layer);
+            if !path.exists() { continue; }
+            let mut rows = self.read_layer(layer)?;
+            let mut any_changed = false;
+            for row in &mut rows {
+                if let Some(val) = updates.get(&row.id) {
+                    mutator(row, val);
+                    any_changed = true;
+                }
+            }
+            if any_changed {
+                self.write_layer(layer, &rows)?;
+            }
+        }
+        Ok(())
     }
 
     /// 删除指定 id 的 engram
