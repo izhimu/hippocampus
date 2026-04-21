@@ -194,20 +194,5 @@ impl SemanticNetwork {
 }
 
 fn is_stop_word(word: &str) -> bool {
-    const STOPS: &[&str] = &[
-        "的","了","在","是","我","你","他","她","它","们","这","那","有","不","也","都","就",
-        "会","可以","要","和","与","或","但","而","所","如","为","从","到","被","把","让","给",
-        "用","没","之","等","中","个","上","下","里","去","来","过","对","很","更","最","已",
-        "于","及","其","又","并","或","还","将","只","因","则","以","至","该","些","么","啊",
-        "吧","呢","吗","哦","嗯","哈","嘛","这个","那个","一个","什么","怎么","没有","不是",
-        "我们","他们","如果","但是","因为","所以","或者","虽然",
-        "the","a","an","and","or","but","if","then","else","when","where","why","how","what",
-        "which","who","whom","this","that","these","those","am","is","are","was","were","be",
-        "been","being","have","has","had","having","do","does","did","doing","to","from","up",
-        "down","in","out","on","off","over","under","again","further","then","once","here",
-        "there","all","any","both","each","few","more","most","other","some","such","no",
-        "nor","not","only","own","same","so","than","too","very","s","t","can","will","just",
-        "don","should","now",
-    ];
-    STOPS.contains(&word.to_lowercase().as_str())
+    crate::stop_words::is_stop_word(word)
 }

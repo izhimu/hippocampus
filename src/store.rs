@@ -4,11 +4,13 @@ use std::io::{self, BufRead, Write};
 use crate::config::HippocampusConfig;
 use crate::engram::Engram;
 
-// HashMap still used by StoreStats
-
-/// JSONL 分层存储层
+/// JSONL 分层存储层 with in-memory cache
 pub struct EngramStore {
     config: HippocampusConfig,
+    /// In-memory cache: id → Engram, populated lazily
+    cache: std::cell::RefCell<Option<HashMap<String, Engram>>>,
+    /// Tracks which layers have been modified and need flushing
+    dirty_layers: std::cell::RefCell<std::collections::HashSet<String>>,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -22,7 +24,11 @@ pub struct StoreStats {
 impl EngramStore {
     pub fn new(config: HippocampusConfig) -> io::Result<Self> {
         fs::create_dir_all(&config.cognitive_dir)?;
-        Ok(Self { config })
+        Ok(Self {
+            config,
+            cache: std::cell::RefCell::new(None),
+            dirty_layers: std::cell::RefCell::new(std::collections::HashSet::new()),
+        })
     }
 
     fn ensure_layer(layer: &str) -> &str {
@@ -32,8 +38,52 @@ impl EngramStore {
         }
     }
 
-    /// 读取单个 layer 的所有 engram
-    pub fn read_layer(&self, layer: &str) -> io::Result<Vec<Engram>> {
+    /// Ensure the cache is populated (lazy load from disk)
+    fn ensure_cache(&self) {
+        if self.cache.borrow().is_none() {
+            let mut map = HashMap::new();
+            for layer in &["L1", "L2", "L3"] {
+                if let Ok(engrams) = self.read_layer_raw(layer) {
+                    for e in engrams {
+                        map.insert(e.id.clone(), e);
+                    }
+                }
+            }
+            *self.cache.borrow_mut() = Some(map);
+        }
+    }
+
+    /// Invalidate cache — public, for cases where external mutation invalidates cache
+    #[allow(dead_code)]
+    fn invalidate_cache(&self) {
+        *self.cache.borrow_mut() = None;
+    }
+
+    /// Mark a layer as dirty (needs flush to disk)
+    fn mark_dirty(&self, layer: &str) {
+        self.dirty_layers.borrow_mut().insert(layer.to_string());
+    }
+
+    /// Flush dirty layers to disk from cache
+    fn flush_dirty(&self) {
+        let dirty: Vec<String> = self.dirty_layers.borrow_mut().drain().collect();
+        if dirty.is_empty() {
+            return;
+        }
+        let cache = self.cache.borrow();
+        let Some(ref map) = *cache else { return };
+
+        for layer in &dirty {
+            let layer = Self::ensure_layer(layer);
+            let rows: Vec<&Engram> = map.values().filter(|e| e.layer == layer).collect();
+            if let Err(e) = self.write_layer(layer, &rows.iter().map(|e| (*e).clone()).collect::<Vec<_>>()) {
+                eprintln!("Warning: failed to flush layer {}: {}", layer, e);
+            }
+        }
+    }
+
+    /// Read a single layer from disk (raw, bypasses cache)
+    fn read_layer_raw(&self, layer: &str) -> io::Result<Vec<Engram>> {
         let layer = Self::ensure_layer(layer);
         let path = self.config.layer_path(layer);
         if !path.exists() {
@@ -58,22 +108,30 @@ impl EngramStore {
         Ok(engrams)
     }
 
-    /// 读取所有 layer（L1+L2+L3），去重
-    pub fn read_all(&self) -> io::Result<Vec<Engram>> {
-        let mut result = vec![];
-        let mut seen = std::collections::HashSet::new();
-        for layer in &["L1", "L2", "L3"] {
-            for e in self.read_layer(layer)? {
-                if seen.insert(e.id.clone()) {
-                    result.push(e);
-                }
-            }
-        }
-        Ok(result)
+    /// Read a single layer (uses cache when available)
+    pub fn read_layer(&self, layer: &str) -> io::Result<Vec<Engram>> {
+        let layer = Self::ensure_layer(layer);
+        self.ensure_cache();
+        let cache = self.cache.borrow();
+        let map = cache.as_ref().unwrap();
+        Ok(map.values().filter(|e| e.layer == layer).cloned().collect())
     }
 
-    /// 追加单个 engram 到对应 layer
+    /// Read all layers (uses cache)
+    pub fn read_all(&self) -> io::Result<Vec<Engram>> {
+        self.ensure_cache();
+        let cache = self.cache.borrow();
+        let map = cache.as_ref().unwrap();
+        Ok(map.values().cloned().collect())
+    }
+
+    /// Append a single engram
     pub fn append(&self, engram: &Engram) -> io::Result<String> {
+        self.ensure_cache();
+        self.cache.borrow_mut().as_mut().unwrap().insert(engram.id.clone(), engram.clone());
+        self.mark_dirty(&engram.layer);
+
+        // Also write to disk immediately for durability
         let layer = Self::ensure_layer(&engram.layer);
         let path = self.config.layer_path(layer);
         let mut file = fs::OpenOptions::new().create(true).append(true).open(&path)?;
@@ -82,15 +140,21 @@ impl EngramStore {
         Ok(engram.id.clone())
     }
 
-    /// 批量追加
+    /// Batch append
     pub fn append_batch(&self, engrams: &[Engram]) -> io::Result<Vec<String>> {
+        self.ensure_cache();
         let mut by_layer: HashMap<&str, Vec<&Engram>> = HashMap::new();
         let mut ids = vec![];
+
         for e in engrams {
             let layer = Self::ensure_layer(&e.layer);
             by_layer.entry(layer).or_default().push(e);
             ids.push(e.id.clone());
+            self.cache.borrow_mut().as_mut().unwrap().insert(e.id.clone(), e.clone());
+            self.mark_dirty(&e.layer);
         }
+
+        // Write to disk for durability
         for (layer, items) in &by_layer {
             let path = self.config.layer_path(layer);
             let mut file = fs::OpenOptions::new().create(true).append(true).open(path)?;
@@ -102,122 +166,115 @@ impl EngramStore {
         Ok(ids)
     }
 
-    /// 更新指定 id 的 engram
+    /// Update an engram by id
     pub fn update<F>(&self, eid: &str, mutator: F) -> io::Result<bool>
     where
         F: FnOnce(&mut Engram),
     {
-        // 在所有 layer 中查找
-        let mut found_layer = None;
-        let mut found_engram = None;
-        for layer in &["L1", "L2", "L3"] {
-            for e in self.read_layer(layer)? {
-                if e.id == eid {
-                    found_layer = Some(layer.to_string());
-                    found_engram = Some(e);
-                    break;
-                }
-            }
-            if found_layer.is_some() {
-                break;
-            }
-        }
+        self.ensure_cache();
 
-        let (old_layer, mut engram) = match (found_layer, found_engram) {
-            (Some(l), Some(e)) => (l, e),
-            _ => return Ok(false),
+        let old_layer = {
+            let cache = self.cache.borrow();
+            let map = cache.as_ref().unwrap();
+            match map.get(eid) {
+                Some(e) => e.layer.clone(),
+                None => return Ok(false),
+            }
         };
 
-        mutator(&mut engram);
-        let new_layer = Self::ensure_layer(&engram.layer).to_string();
-
-        if old_layer == new_layer {
-            // 同层更新
-            let mut rows = self.read_layer(&old_layer)?;
-            let mut updated = false;
-            for r in &mut rows {
-                if r.id == eid && !updated {
-                    *r = engram.clone();
-                    updated = true;
-                }
-            }
-            self.write_layer(&old_layer, &rows)?;
-        } else {
-            // 跨层移动
-            let old_rows: Vec<Engram> = self.read_layer(&old_layer)?
-                .into_iter().filter(|e| e.id != eid).collect();
-            self.write_layer(&old_layer, &old_rows)?;
-            let mut new_rows = self.read_layer(&new_layer)?;
-            new_rows.push(engram);
-            self.write_layer(&new_layer, &new_rows)?;
+        {
+            let mut cache = self.cache.borrow_mut();
+            let map = cache.as_mut().unwrap();
+            let engram = match map.get_mut(eid) {
+                Some(e) => e,
+                None => return Ok(false),
+            };
+            mutator(engram);
         }
 
+        let new_layer = {
+            let cache = self.cache.borrow();
+            let map = cache.as_ref().unwrap();
+            map.get(eid).unwrap().layer.clone()
+        };
+
+        if old_layer != new_layer {
+            self.mark_dirty(&old_layer);
+        }
+        self.mark_dirty(&new_layer);
+        self.flush_dirty();
         Ok(true)
     }
 
-    /// Batch update multiple engrams with a single read-modify-write per layer
+    /// Batch update multiple engrams
     pub fn batch_update<F, V>(&self, updates: &HashMap<String, V>, mutator: F) -> io::Result<()>
     where
         F: Fn(&mut Engram, &V),
     {
-        for layer in &["L1", "L2", "L3"] {
-            let path = self.config.layer_path(layer);
-            if !path.exists() { continue; }
-            let mut rows = self.read_layer(layer)?;
-            let mut any_changed = false;
-            for row in &mut rows {
-                if let Some(val) = updates.get(&row.id) {
+        self.ensure_cache();
+
+        let mut touched_layers = std::collections::HashSet::new();
+        {
+            let mut cache = self.cache.borrow_mut();
+            let map = cache.as_mut().unwrap();
+            for (id, val) in updates {
+                if let Some(row) = map.get_mut(id) {
+                    let layer = row.layer.clone();
                     mutator(row, val);
-                    any_changed = true;
+                    touched_layers.insert(layer);
                 }
             }
-            if any_changed {
-                self.write_layer(layer, &rows)?;
-            }
         }
+
+        for layer in &touched_layers {
+            self.mark_dirty(layer);
+        }
+        self.flush_dirty();
         Ok(())
     }
 
-    /// 删除指定 id 的 engram
+    /// Delete an engram by id
     pub fn delete(&self, eid: &str) -> io::Result<bool> {
-        for layer in &["L1", "L2", "L3"] {
-            let rows = self.read_layer(layer)?;
-            if rows.iter().any(|e| e.id == eid) {
-                let new_rows: Vec<Engram> = rows.into_iter().filter(|e| e.id != eid).collect();
-                self.write_layer(layer, &new_rows)?;
-                return Ok(true);
+        self.ensure_cache();
+
+        let layer = {
+            let mut cache = self.cache.borrow_mut();
+            let map = cache.as_mut().unwrap();
+            match map.remove(eid) {
+                Some(e) => e.layer,
+                None => return Ok(false),
             }
-        }
-        Ok(false)
+        };
+
+        self.mark_dirty(&layer);
+        self.flush_dirty();
+        Ok(true)
     }
 
-    /// 按 id 查找
+    /// Get an engram by id (uses cache)
     pub fn get_by_id(&self, eid: &str) -> io::Result<Option<Engram>> {
-        for layer in &["L1", "L2", "L3"] {
-            for e in self.read_layer(layer)? {
-                if e.id == eid {
-                    return Ok(Some(e));
-                }
-            }
-        }
-        Ok(None)
+        self.ensure_cache();
+        let cache = self.cache.borrow();
+        Ok(cache.as_ref().unwrap().get(eid).cloned())
     }
 
-    /// 统计
+    /// Statistics (uses cache)
     pub fn stats(&self) -> io::Result<StoreStats> {
+        self.ensure_cache();
+        let cache = self.cache.borrow();
+        let map = cache.as_ref().unwrap();
+
         let mut stats = StoreStats::default();
         let mut total_ac = 0u64;
         let mut total_imp = 0u64;
-        for layer in &["L1", "L2", "L3"] {
-            let rows = self.read_layer(layer)?;
-            let count = rows.len();
-            stats.by_layer.insert(layer.to_string(), count);
-            stats.total += count;
-            for r in &rows {
-                total_ac += r.access_count as u64;
-                total_imp += r.importance as u64;
-            }
+
+        for e in map.values() {
+            *stats.by_layer.entry(e.layer.clone()).or_insert(0) += 1;
+            stats.total += 1;
+            total_ac += e.access_count as u64;
+            total_imp += e.importance as u64;
         }
+
         if stats.total > 0 {
             stats.avg_access_count = total_ac as f64 / stats.total as f64;
             stats.avg_importance = total_imp as f64 / stats.total as f64;

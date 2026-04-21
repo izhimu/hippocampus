@@ -29,6 +29,7 @@ impl CognitiveMap {
 
     /// TD learning update: when transitioning from A to B
     /// M[A][j] += α * (indicator_B[j] + γ * M[B][j] - M[A][j])
+    /// Optimized: collect deltas first, then apply (avoids cloning entire row)
     pub fn td_update(&mut self, from_id: &str, to_id: &str) {
         if from_id == to_id {
             return;
@@ -37,24 +38,34 @@ impl CognitiveMap {
         self.ensure_node(from_id);
         self.ensure_node(to_id);
 
-        let to_id = to_id.to_string();
+        let to_id_owned = to_id.to_string();
         let gamma = self.gamma;
         let alpha = self.alpha;
 
-        let to_row = self.matrix.get(&to_id).cloned().unwrap_or_default();
+        // Collect deltas without cloning
+        let (deltas, to_row_self_val): (Vec<(String, f64)>, f64) = {
+            let to_row = self.matrix.get(&to_id_owned);
+            let from_row = self.matrix.get(from_id).unwrap();
+            let self_val = to_row.and_then(|r| r.get(&to_id_owned)).copied().unwrap_or(0.0);
+            let ds: Vec<(String, f64)> = from_row.iter().map(|(j, from_val)| {
+                let indicator = if *j == to_id_owned { 1.0 } else { 0.0 };
+                let to_val = to_row.and_then(|r| r.get(j)).copied().unwrap_or(0.0);
+                let delta = alpha * (indicator + gamma * to_val - *from_val);
+                (j.clone(), delta)
+            }).collect();
+            (ds, self_val)
+        };
 
+        // Apply deltas
         let from_row = self.matrix.get_mut(from_id).unwrap();
-        for (j, from_val) in from_row.iter_mut() {
-            let indicator = if *j == to_id { 1.0 } else { 0.0 };
-            let to_val = to_row.get(j).copied().unwrap_or(0.0);
-            *from_val += alpha * (indicator + gamma * to_val - *from_val);
+        for (j, delta) in deltas {
+            *from_row.entry(j).or_insert(0.0) += delta;
         }
 
         // Ensure the to_id entry exists in from_row
         let from_row = self.matrix.get_mut(from_id).unwrap();
-        if !from_row.contains_key(&to_id) {
-            let to_val = to_row.get(&to_id).copied().unwrap_or(0.0);
-            from_row.insert(to_id.clone(), alpha * (1.0 + gamma * to_val));
+        if !from_row.contains_key(&to_id_owned) {
+            from_row.insert(to_id_owned, alpha * (1.0 + gamma * to_row_self_val));
         }
     }
 
@@ -221,16 +232,9 @@ impl CognitiveMap {
     }
 }
 
-/// Simple deterministic pseudo-random for weighted sampling
+/// Use shared fast_random_f64 for weighted sampling
 fn simple_random() -> f64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let ns = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    // xorshift-style mixing
-    let x = (ns as u64).wrapping_mul(0x2545F4914F6CDD1D);
-    x as f64 / u64::MAX as f64
+    crate::util::fast_random_f64()
 }
 
 #[cfg(test)]

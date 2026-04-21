@@ -31,6 +31,7 @@ pub struct ImportanceChange {
 const STOP_WORDS: &[&str] = &[
     "这个","那个","一个","什么","怎么","可以","没有","不是",
     "我们","他们","如果","但是","因为","所以","或者","虽然",
+    // keep local list for CJK bigram-specific filtering in tag discovery
 ];
 
 impl Reconsolidation {

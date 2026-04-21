@@ -34,7 +34,7 @@ impl SessionManager {
     /// 创建新会话
     pub fn start_session(&mut self) -> io::Result<Session> {
         let session = Session {
-            id: uuid_hex(),
+            id: crate::util::uuid_hex(),
             started_at: now_iso(),
             last_active_at: now_iso(),
             message_count: 0,
@@ -129,13 +129,4 @@ impl SessionManager {
 
 fn now_iso() -> String {
     crate::engram::chrono_now_iso()
-}
-
-fn uuid_hex() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("{:016x}{:016x}", nanos, nanos.wrapping_mul(0x9e3779b97f4a7c15))
 }

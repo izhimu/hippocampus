@@ -13,8 +13,10 @@ pub mod search;
 pub mod semantic_network;
 pub mod session;
 pub mod simhash;
+pub mod stop_words;
 pub mod store;
 pub mod reflect;
+pub mod util;
 
 // re-export
 pub use config::HippocampusConfig;

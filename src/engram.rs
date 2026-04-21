@@ -36,7 +36,7 @@ impl Engram {
         let now = chrono_now_iso();
         let fingerprint = crate::simhash::simhash(&content);
         Self {
-            id: uuid_hex(),
+            id: crate::util::uuid_hex(),
             content,
             importance,
             emotion: "neutral".into(),
@@ -78,13 +78,4 @@ pub fn chrono_now_iso() -> String {
 
 pub fn parse_iso_date(iso: &str) -> Option<chrono::NaiveDate> {
     iso.get(..10)?.parse().ok()
-}
-
-fn uuid_hex() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("{:016x}{:016x}", nanos, nanos.wrapping_mul(0x9e3779b97f4a7c15))
 }

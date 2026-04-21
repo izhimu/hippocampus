@@ -196,7 +196,7 @@ impl Reflector {
 
         for _ in 0..iterations {
             // Pick a random start node
-            let start_idx = (simple_random_usize()) % start_nodes.len();
+            let start_idx = crate::util::fast_random_usize() % start_nodes.len();
             let start = start_nodes[start_idx];
 
             let path = cog_map.random_walk(start, 5);
@@ -230,7 +230,6 @@ impl Reflector {
         }
 
         // 2. 遗忘删除：score < vacuum_min_score
-        let _threshold = self.config.vacuum_min_score;
         for layer in &["L1", "L2", "L3"] {
             if let Ok(engrams) = self.store.read_layer(layer) {
                 for e in &engrams {
@@ -282,13 +281,4 @@ fn is_older_than_days(created_at: &str, days: i64) -> bool {
 
 fn parse_days_ago(created_at: &str) -> i64 {
     crate::search::days_since(created_at, "") as i64
-}
-
-fn simple_random_usize() -> usize {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let ns = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    (ns as usize).wrapping_mul(0x2545F4914F6CDD1D) >> 32
 }

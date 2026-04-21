@@ -84,7 +84,7 @@ pub fn final_score_actr(
     (rel_score + imp_score + freq_score) * d
 }
 
-/// Legacy final_score (exponential decay)
+/// Legacy final_score kept for backward compatibility
 pub fn final_score(bm25_score: f64, importance: u32, access_count: u32, days_ago: f64, half_life: f64) -> f64 {
     let d = decay(days_ago, half_life);
     let rel_score = (1.0 + bm25_score).ln() * 0.6;

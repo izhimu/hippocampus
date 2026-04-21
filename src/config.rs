@@ -46,9 +46,8 @@ pub struct HippocampusConfig {
     pub auto_memory_threshold: f64,
     pub auto_memory_blacklist: Vec<String>,
 
-    // SimHash 配置
-    pub simhash_bm25_weight: f64,
-    pub simhash_sdm_weight: f64,
+    // SimHash pre-filter threshold (max hamming distance)
+    pub simhash_max_hamming: u32,
 
     // ACT-R 配置
     pub actr_decay_rate: f64,
@@ -107,8 +106,7 @@ impl HippocampusConfig {
             auto_memory_enabled: true,
             auto_memory_threshold: 0.3,
             auto_memory_blacklist: vec!["NO_REPLY".into(), "HEARTBEAT_OK".into(), "收到".into(), "好的".into()],
-            simhash_bm25_weight: 0.6,
-            simhash_sdm_weight: 0.4,
+            simhash_max_hamming: 25,
             actr_decay_rate: 0.5,
             actr_max_access_history: 50,
         };
@@ -166,6 +164,15 @@ impl HippocampusConfig {
                         self.auto_memory_blacklist = v.iter()
                             .filter_map(|x| x.as_str().map(String::from))
                             .collect();
+                    }
+                    if let Some(v) = obj.get("simhash_max_hamming").and_then(|v| v.as_u64()) {
+                        self.simhash_max_hamming = v as u32;
+                    }
+                    if let Some(v) = obj.get("actr_decay_rate").and_then(|v| v.as_f64()) {
+                        self.actr_decay_rate = v;
+                    }
+                    if let Some(v) = obj.get("actr_max_access_history").and_then(|v| v.as_u64()) {
+                        self.actr_max_access_history = v as usize;
                     }
                 }
             }

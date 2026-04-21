@@ -82,8 +82,16 @@ impl ConflictResolver {
     }
 
     /// Cluster engrams by SimHash fingerprint proximity
+    /// Optimized: sort by fingerprint, then use sliding window comparison
     fn cluster_by_fingerprint<'a>(&self, engrams: &'a [Engram]) -> Vec<Vec<&'a Engram>> {
-        let n = engrams.len();
+        // Pre-compute fingerprints and sort by fingerprint value
+        let mut indexed: Vec<(u64, usize)> = engrams.iter().enumerate().map(|(i, e)| {
+            let fp = if e.fingerprint != 0 { e.fingerprint } else { simhash::simhash(&e.content) };
+            (fp, i)
+        }).collect();
+        indexed.sort_by_key(|(fp, _)| *fp);
+
+        let n = indexed.len();
         let mut assigned = vec![false; n];
         let mut clusters = vec![];
 
@@ -91,27 +99,20 @@ impl ConflictResolver {
             if assigned[i] {
                 continue;
             }
-            let mut cluster = vec![i];
+            let mut cluster = vec![indexed[i].1];
             assigned[i] = true;
+            let fp_i = indexed[i].0;
 
-            let fp_i = if engrams[i].fingerprint != 0 {
-                engrams[i].fingerprint
-            } else {
-                simhash::simhash(&engrams[i].content)
-            };
-
+            // Only compare within a window of sorted fingerprints
             for j in (i + 1)..n {
-                if assigned[j] {
-                    continue;
+                if assigned[j] { continue; }
+                // Early termination: if sorted fingerprints are too far apart numerically,
+                // hamming distance will also be large
+                if indexed[j].0.wrapping_sub(fp_i) > (1u64 << (64 - self.hamming_threshold)) {
+                    break;
                 }
-                let fp_j = if engrams[j].fingerprint != 0 {
-                    engrams[j].fingerprint
-                } else {
-                    simhash::simhash(&engrams[j].content)
-                };
-
-                if simhash::hamming_distance(fp_i, fp_j) <= self.hamming_threshold {
-                    cluster.push(j);
+                if simhash::hamming_distance(fp_i, indexed[j].0) <= self.hamming_threshold {
+                    cluster.push(indexed[j].1);
                     assigned[j] = true;
                 }
             }
