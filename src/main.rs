@@ -887,6 +887,45 @@ fn cmd_gateway(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// 【优化 A】输入前置过滤：判断是否应跳过 recall
+/// - 短输入（< 4 字符）
+/// - slash 命令
+/// - 中英文确认词/语气词
+fn should_skip_recall(prompt: &str) -> bool {
+    let trimmed = prompt.trim();
+
+    // 短输入直接跳过
+    if trimmed.len() < 4 {
+        return true;
+    }
+
+    // slash 命令跳过
+    if trimmed.starts_with('/') {
+        return true;
+    }
+
+    // 中英文确认词/语气词集合
+    const SKIP_WORDS: &[&str] = &[
+        // 中文
+        "好", "好的", "是", "对", "嗯", "行", "可以", "继续", "确认", "没错", "对的",
+        "收到", "明白", "知道了", "了解", "没问题", " ok", "OK",
+        // 英文
+        "ok", "okay", "yes", "no", "yep", "nope", "sure", "right", "correct",
+        "fine", "done", "thanks", "got it", "agreed", "continue", "go ahead",
+        "please", "cool", "great", "nice", "perfect", "exactly", "absolutely",
+        "sounds good", "looks good", "make sense",
+    ];
+
+    let lower = trimmed.to_lowercase();
+    for word in SKIP_WORDS {
+        if lower == *word {
+            return true;
+        }
+    }
+
+    false
+}
+
 fn cmd_hook(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut buffer = String::new();
     let _ = std::io::stdin().read_to_string(&mut buffer);
@@ -973,49 +1012,69 @@ fn cmd_hook(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             // 2. 尝试召回并记录提示词 (Prompt/Dialogue)
             if let Some(prompt) = event_prompt {
                 if !prompt.is_empty() {
-                    // 【改进】1. 先进行召回（只寻找过去的记忆）
-                    let results = hippo.recall(prompt, 3, 0.05, true, None, None);
-                    
-                    // 【改进】2. 召回后再记录当前输入（确保不被本次召回看到）
+                    // 【优化 A】输入前置过滤：跳过不需要召回的短输入
+                    let skip_recall = should_skip_recall(prompt);
+
+                    // 【优化 A】记录当前输入（无论是否跳过召回，gate 仍需评估）
                     if let Ok(d) = hippo.auto_remember(prompt, "dialogue", session_id, false) {
                         last_decision = Some(d);
                     }
-                    
+
+                    let results = if skip_recall {
+                        vec![]
+                    } else {
+                        // 先进行召回（只寻找过去的记忆）
+                        hippo.recall(prompt, 3, 0.05, true, None, None)
+                    };
+
                     if !results.is_empty() {
-                        let mut mem_context = String::from("🧠 海马体召回背景记忆：\n");
-                        for r in &results {
+                        // 【优化 B】召回质量门槛：最高分 < 0.15 时不注入
+                        let best_score = results.iter().filter_map(|r| r.get("score").and_then(|v| v.as_f64())).fold(0.0f64, f64::max);
+                        let injection_threshold = 0.15;
+
+                        // 【优化 C】查询-结果去重：过滤与用户输入高度重复的记忆
+                        let filtered: Vec<_> = results.into_iter().filter(|r| {
                             let content = r.get("content").and_then(|v| v.as_str()).unwrap_or("");
-                            let layer = r.get("layer").and_then(|v| v.as_str()).unwrap_or("?");
-                            mem_context.push_str(&format!("- [{}] {}\n", layer, content));
-                        }
-                        
-                        if is_claude {
-                            // 方案 1+3: 提取第一条记忆的预览并进行拟人化描述
-                            let preview: String = results[0].get("content")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.chars().take(20).collect())
-                                .unwrap_or_else(|| "...".to_string());
-                            let ui_msg = format!("🧠 Hippocampus: 我想起了关于 \"{}...\" 的相关记忆 (共 {} 条)", 
-                                preview, results.len());
+                            let sim = hippocampus::dedup::Deduplicator::jaccard_similarity(content, prompt);
+                            sim < 0.5
+                        }).collect();
 
-                            let mut response = serde_json::json!({
-                                "continue": true,
-                                "additionalContext": mem_context,
-                                "systemMessage": ui_msg
-                            });
+                        if best_score >= injection_threshold && !filtered.is_empty() {
+                            let mut mem_context = String::from("🧠 海马体召回背景记忆：\n");
+                            for r in &filtered {
+                                let content = r.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                                let layer = r.get("layer").and_then(|v| v.as_str()).unwrap_or("?");
+                                mem_context.push_str(&format!("- [{}] {}\n", layer, content));
+                            }
 
-                            if hook_type == "auto" || hook_type == "recall" {
+                            if is_claude {
+                                let preview: String = filtered[0].get("content")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.chars().take(20).collect())
+                                    .unwrap_or_else(|| "...".to_string());
+                                let ui_msg = format!("🧠 Hippocampus: 我想起了关于 \"{}...\" 的相关记忆 (共 {} 条)",
+                                    preview, filtered.len());
+
+                                let mut response = serde_json::json!({
+                                    "continue": true,
+                                    "additionalContext": mem_context,
+                                    "systemMessage": ui_msg
+                                });
+
                                 response["hookSpecificOutput"] = serde_json::json!({
                                     "hookEventName": "UserPromptSubmit",
                                     "additionalContext": mem_context
                                 });
+                                print_json(&response);
+                            } else {
+                                print_json(&serde_json::json!({ "context": mem_context }));
                             }
-                            print_json(&response);
-                        } else {
-                            print_json(&serde_json::json!({ "context": mem_context }));
+                        } else if is_claude {
+                            // 召回质量不足或全部去重后为空，静默通过
+                            print_json(&serde_json::json!({ "continue": true }));
                         }
                     } else if is_claude {
-                        // 没有结果时保持静默，但返回合法的 JSON 以符合规范
+                        // 无召回结果或跳过召回，静默通过
                         print_json(&serde_json::json!({ "continue": true }));
                     }
                 }
